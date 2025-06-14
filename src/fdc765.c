@@ -438,8 +438,6 @@ static void rep_movsd(Context* ctx) {
     rep_movsb(ctx);
 }
 
-static void run(Context* ctx, unsigned label);
-
 static u765_DiskUnit* GetUnitPtr(u765_Controller* fdc, uint8_t unit) {
     unit &= 1;
 
