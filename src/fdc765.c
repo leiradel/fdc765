@@ -421,6 +421,7 @@ enum {
 #define JC(ctx, label) do { if (ctx->carry) goto label; } while (0)
 #define JNC(ctx, label) do { if (!ctx->carry) goto label; } while (0)
 #define JA(ctx, label) do { if (!ctx->zero && !ctx->carry) goto label; } while (0)
+#define JPREG(ctx, val) do { label = (val); goto again; } while (0)
 #define SETNE(ctx) (!ctx->zero)
 #define READW(ptr) ((ptr)[0] | (uint16_t)(ptr)[1] << 8)
 #define WRITEW(ptr, val) do { (ptr)[0] = (uint8_t)(val); (ptr)[1] = (uint8_t)((val) >> 8); } while (0)
@@ -692,7 +693,7 @@ static void InitFDC(Context* ctx) {
 }
 
 static void run(Context* ctx, unsigned label) {
-again__:
+again:
     switch (label) {
         // --------------------------------------------------------------------------------
         case case_FDC_NewCommand: label_FDC_NewCommand:
@@ -1325,7 +1326,7 @@ again__:
         case case_FDC_ReceiveDataEnd: label_FDC_ReceiveDataEnd:
             ctx->eax.e = ctx->edi.ctrl->FDCReturn;
             ctx->edi.ctrl->FDCVector = ctx->eax.e;
-            label = ctx->eax.e; goto again__;
+            JPREG(ctx, ctx->eax.e);
 
         // ######################################################################
 
@@ -1349,7 +1350,7 @@ again__:
 
             ctx->eax.e = ctx->edi.ctrl->FDCReturn;
             ctx->edi.ctrl->FDCVector = ctx->eax.e;
-            label = ctx->eax.e; goto again__;
+            JPREG(ctx, ctx->eax.e);
 
         case case_FDC_SendData2: label_FDC_SendData2:
             ctx->edi.ctrl->OverRunTest = true;
@@ -1793,7 +1794,7 @@ again__:
 
             ctx->ebx.disk = ctx->edi.ctrl->UnitPtr;          // restore FDD Unit ptr
             ctx->eax.e = ctx->edi.ctrl->SectorToCPUReturn;
-            label = ctx->eax.e; goto again__;
+            JPREG(ctx, ctx->eax.e);
 
         // ######################################################################
 
@@ -1913,7 +1914,7 @@ again__:
 
         case case_CPUDataToSector_Done: label_CPUDataToSector_Done:
             ctx->eax.e = ctx->edi.ctrl->CPUToSectorReturn;
-            label = ctx->eax.e; goto again__;
+            JPREG(ctx, ctx->eax.e);
 
         // ######################################################################
 
@@ -1955,7 +1956,7 @@ again__:
 
         case case_FDCBuff_ReturnSectorResults: label_FDCBuff_ReturnSectorResults:
             ctx->eax.e = ctx->edi.ctrl->FDCBufferReturn;
-            label = ctx->eax.e; goto again__;
+            JPREG(ctx, ctx->eax.e);
 
         // ######################################################################
 
