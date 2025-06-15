@@ -181,12 +181,12 @@ uint8_t U765_FUNCTION(u765_StatusPortRead)(u765_Controller* fdc) {
             fdc->OverRunError = true;
 
             // pushad
-            fdc->FDCVector = fdc->FDCReturn;
-
-            Context ctx;
-            ctx.edi.ctrl = fdc;
-            ctx.esp.e = 0;
-            run(&ctx, fdc->FDCReturn);
+            //Context ctx;
+            //ctx.edi.ctrl = fdc;
+            //ctx.esp.e = 0;
+            //ctx.eax.e = fdc->FDCReturn;
+            //fdc->FDCVector = ctx.eax.e;
+            //run(&ctx, ctx.eax.e);
             // popad
 
             fdc->ST0 &= 0x3f;
@@ -196,11 +196,12 @@ uint8_t U765_FUNCTION(u765_StatusPortRead)(u765_Controller* fdc) {
 
             // do after clearing execution mode in MSR, fixes Italia 1990
             //pushad
-            fdc->FDCVector = fdc->FDCReturn;
-
+            Context ctx;
             ctx.edi.ctrl = fdc;
             ctx.esp.e = 0;
-            run(&ctx, fdc->FDCReturn);
+            ctx.eax.e = fdc->FDCReturn;
+            fdc->FDCVector = ctx.eax.e;
+            run(&ctx, ctx.eax.e);
             //popad
         }
         else {
