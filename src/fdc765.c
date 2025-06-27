@@ -14,6 +14,7 @@
         u765_Controller* ctrl; \
         u765_DiskUnit* disk; \
         u765_State* stat; \
+        FILE* fp; \
     } \
     Reg;
 #else
@@ -40,245 +41,368 @@ typedef struct {
 }
 Context;
 
+#define ARG(ctx, index) ((ctx)->stack[(ctx)->esp.e + (index)])
+#define PUSH(ctx, val) do { (ctx)->stack[(ctx)->esp.e++] = val; } while (0)
+#define POP(ctx) ((ctx)->stack[--(ctx)->esp.e])
+#define CALL(ctx, label) do { run((ctx), (label)); } while (0)
+#define AND(ctx, left, right) do { (left) &= (right); (ctx)->zero = (left) == 0; (ctx)->carry = 0; } while (0)
+#define OR(ctx, left, right) do { (left) |= (right); (ctx)->zero = (left) == 0; (ctx)->carry = 0; } while (0)
+#define SHL(ctx, left, right) do { (left) <<= (right); } while (0)
+#define SHR(ctx, left, right) do { (left) >>= (right); } while (0)
+#define INC(ctx, val) do { (val)++; (ctx)->zero = (val) == 0; } while (0)
+#define DEC(ctx, val) do { (val)--; (ctx)->zero = (val) == 0; } while (0)
+#define ADD(ctx, left, right) do { (left) += (right); (ctx)->zero = (left) == 0; (ctx)->carry = (left) < right; } while (0)
+#define SUB(ctx, left, right) do { (ctx)->carry = (left) < right; (left) -= (right); (ctx)->zero = (left) == 0; } while (0)
+#define CMP(ctx, left, right) do { (ctx)->zero = ((left) == (right)); (ctx)->carry = ((left) < (right)); } while (0)
+#define TEST(ctx, left, right) do { (ctx)->zero = ((left) & (right)) == 0; (ctx)->carry = false; } while (0)
+#define JE(ctx, label) do { if ((ctx)->zero) goto label; } while (0)
+#define JNE(ctx, label) do { if (!(ctx)->zero) goto label; } while (0)
+#define JNZ JNE
+#define JC(ctx, label) do { if ((ctx)->carry) goto label; } while (0)
+#define JNC(ctx, label) do { if (!(ctx)->carry) goto label; } while (0)
+#define JA(ctx, label) do { if (!(ctx)->zero && !(ctx)->carry) goto label; } while (0)
+#define JPREG(ctx, val) do { label = (val); goto again; } while (0)
+#define SETNE(ctx) (!(ctx)->zero)
+#define READW(ptr) ((ptr)[0] | (uint16_t)(ptr)[1] << 8)
+#define WRITEW(ptr, val) do { (ptr)[0] = (uint8_t)(val); (ptr)[1] = (uint8_t)((val) >> 8); } while (0)
+#define READDW(ptr) ((ptr)[0] | (uint32_t)(ptr)[1] << 8 | (uint32_t)(ptr)[2] << 16 | (uint32_t)(ptr)[3] << 24)
+#define WRITEDW(ptr, val) do { (ptr)[0] = (uint8_t)(val); (ptr)[1] = (uint8_t)((val) >> 8); (ptr)[2] = (uint8_t)((val) >> 16); (ptr)[3] = (uint8_t)((val) >> 24); } while (0)
+
+static void rep_movsb(Context* ctx) {
+    memcpy(ctx->edi.u8, ctx->esi.u8, ctx->ecx.e);
+    ctx->edi.u8 += ctx->ecx.e;
+    ctx->esi.u8 += ctx->ecx.e;
+    ctx->ecx.e = 0;
+}
+
+static void rep_movsd(Context* ctx) {
+    ctx->ecx.e *= 4;
+    rep_movsb(ctx);
+}
+
 /*-----------------------------------------------------------------------------
 HIGH LEVEL INTERFACE
 -----------------------------------------------------------------------------*/
 
-static void LowLevelInitialise(u765_Controller*);
-static void WriteCurrentDisk(u765_Controller*, uint8_t);
-static u765_DiskUnit* GetUnitPtr(u765_Controller*, uint8_t);
-static void EDsk2Dsk(u765_Controller*, uint8_t);
+static void LowLevelInitialise(Context*, u765_Controller*);
+static void WriteCurrentDisk(Context*, u765_Controller*, uint8_t);
+static void GetUnitPtr(Context*, uint8_t);
+static void EDsk2Dsk(Context*, uint8_t);
 static void run(Context*, unsigned);
 
-u765_Controller* U765_FUNCTION(u765_Initialise)(void) {
-    u765_Controller* fdc = (u765_Controller*)malloc(sizeof(*fdc));
+void U765_FUNCTION(u765_SetRandomMethod)(u765_Controller* FdcHandle, uint8_t RndMethod) {
+    Context ctx;
+    ctx.esp.e = 0;
+    ctx.ecx.ctrl = FdcHandle;
+    ctx.eax.l = RndMethod;
 
-    if (fdc != NULL) {
-        memset(fdc, 0, sizeof(*fdc));
-        LowLevelInitialise(fdc);
+    if ((ctx.eax.l == 255) || (ctx.eax.l <= 2)) {
+        ctx.ecx.ctrl->DskRndMethod = ctx.eax.l;
     }
-
-    return fdc;
 }
 
-void U765_FUNCTION(u765_Shutdown)(u765_Controller* fdc) {
-    u765_EjectDisk(fdc, 0);
-    u765_EjectDisk(fdc, 1);
-    free(fdc);
+void U765_FUNCTION(u765_SetActiveCallback)(u765_Controller* FdcHandle, void (*lpActiveCallback)(void)) {
+    Context ctx;
+    ctx.esp.e = 0;
+
+    ctx.eax.ctrl = FdcHandle;
+    ctx.eax.ctrl->ActiveCallback = lpActiveCallback;
 }
 
-void U765_FUNCTION(u765_ResetDevice)(u765_Controller* fdc) {
-    LowLevelInitialise(fdc);
+void U765_FUNCTION(u765_SetCommandCallback)(u765_Controller* FdcHandle, void (*lpCommandCallback)(uint8_t const*, uint8_t)) {
+    Context ctx;
+    ctx.esp.e = 0;
+
+    ctx.eax.ctrl = FdcHandle;
+    ctx.eax.ctrl->CommandCallback = lpCommandCallback;
 }
 
-void U765_FUNCTION(u765_InsertDisk)(u765_Controller* fdc, char const* filename, uint8_t unit) {
-    u765_EjectDisk(fdc, unit); // close any open disk on this unit
+void U765_FUNCTION(u765_SetMotorState)(u765_Controller* FdcHandle, uint8_t Value) {
+    Context ctx;
+    ctx.esp.e = 0;
 
-    u765_DiskUnit* disk = GetUnitPtr(fdc, unit);
+    ctx.ecx.ctrl = FdcHandle;
+    ctx.eax.l = Value;
 
-    disk->EDSK = false;
-    disk->DiskInserted = false;
-    disk->ContentsChanged = false;
+    AND(&ctx, ctx.eax.l, 8);
+    SHR(&ctx, ctx.eax.l, 3);
 
-    disk->WriteProtect = false;
-
-    FILE* file = fopen(filename, "r+b");
-
-    if (file == NULL) {
-        disk->WriteProtect = true;
-        file = fopen(filename, "rb");
-
-        if (file == NULL) {
-            disk->DiskFileHandle = NULL;
-            return;
-        }
-    }
-
-    disk->DiskFileHandle = file;
-
-    struct stat buf;
-
-    if (stat(filename, &buf) != 0) {
-        u765_EjectDisk(fdc, unit);
-        return;
-    }
-
-    disk->DiskArrayLen = buf.st_size;
-    disk->DiskArrayPtr = malloc(buf.st_size);
-
-    if (disk->DiskArrayPtr == NULL) {
-        u765_EjectDisk(fdc, unit);
-        return;
-    }
-
-    size_t const numread = fread(disk->DiskArrayPtr, 1, disk->DiskArrayLen, disk->DiskFileHandle);
-
-    if (numread != disk->DiskArrayLen) {
-        u765_EjectDisk(fdc, unit);
-        return;
-    }
-
-    disk->DiskInserted = true;
-    disk->DriveStateChanged = true;
-
-    if (*(uint8_t*)disk->DiskArrayPtr == 'E') {
-        EDsk2Dsk(fdc, unit);
-    }
-
-    memcpy(disk->DiskBlock.DiskInfoBlock, disk->DiskArrayPtr, 256);
-
-    // copy filename into Unit structure
-    strncpy(disk->Filename, filename, sizeof(disk->Filename));
-    disk->Filename[sizeof(disk->Filename) - 1] = 0;
-
-    disk->ContentsChanged = false;
-    LowLevelInitialise(fdc);
-}
-
-void U765_FUNCTION(u765_EjectDisk)(u765_Controller* fdc, uint8_t unit) {
-    u765_DiskUnit* disk = GetUnitPtr(fdc, unit);
-
-    if (disk->DiskFileHandle != NULL) {
-        WriteCurrentDisk(fdc, unit);
-
-        if (disk->DiskArrayPtr != NULL) {
-            free(disk->DiskArrayPtr);
-            disk->DiskArrayPtr = NULL;
-        }
-
-        fclose(disk->DiskFileHandle);
-        disk->DiskFileHandle = NULL;
-        disk->DiskInserted = false;
-    }
-
-    LowLevelInitialise(fdc);
-}
-
-bool U765_FUNCTION(u765_GetMotorState)(u765_Controller* fdc) {
-    return fdc->MotorState;
-}
-
-void U765_FUNCTION(u765_SetMotorState)(u765_Controller* fdc, uint8_t motor_state) {
-    motor_state &= 8;
-    motor_state >>= 3;
-    fdc->NewMotorState = motor_state;
+    ctx.ecx.ctrl->NewMotorState = ctx.eax.l;
 
     // when the motor is turned off we still need a simple timer method
     // where we will accept further FDC read commands.
     // some disks require this behaviour, such as Scrabble Deluxe
 
-    if ((fdc->MotorState == 1) && (fdc->NewMotorState == 0)) {
-        fdc->MotorOffTimer = 3; // 255
+    if ((ctx.ecx.ctrl->MotorState == 1) && (ctx.ecx.ctrl->NewMotorState == 0)) {
+        ctx.ecx.ctrl->MotorOffTimer = 3; // 255
     }
 
-    fdc->MotorState = fdc->NewMotorState;
+    ctx.eax.l = ctx.ecx.ctrl->NewMotorState;
+    ctx.ecx.ctrl->MotorState = ctx.eax.l;
 }
 
-uint8_t U765_FUNCTION(u765_StatusPortRead)(u765_Controller* fdc) {
-    if (fdc->OverRunTest == true) {
-        if (fdc->OverRunCounter == 0) {
-            fdc->OverRunTest = false;
-            fdc->OverRunError = true;
+bool U765_FUNCTION(u765_GetMotorState)(u765_Controller* FdcHandle) {
+    Context ctx;
+    ctx.esp.e = 0;
+
+    ctx.eax.ctrl = FdcHandle;
+    return ctx.eax.ctrl->MotorState;
+}
+
+uint8_t U765_FUNCTION(u765_StatusPortRead)(u765_Controller* FdcHandle) {
+    Context ctx;
+    ctx.esp.e = 0;
+
+    ctx.edi.ctrl = FdcHandle;
+
+    if (ctx.edi.ctrl->OverRunTest == true) {
+        if (ctx.edi.ctrl->OverRunCounter == 0) {
+            ctx.edi.ctrl->OverRunTest = false;
+            ctx.edi.ctrl->OverRunError = true;
 
             // pushad
-            //Context ctx;
-            //ctx.edi.ctrl = fdc;
-            //ctx.esp.e = 0;
-            //ctx.eax.e = fdc->FDCReturn;
-            //fdc->FDCVector = ctx.eax.e;
-            //run(&ctx, ctx.eax.e);
+            // mov     eax, [edi].FDCReturn
+            // mov     [edi].FDCVector, eax
+            // call    eax
             // popad
 
-            fdc->ST0 &= 0x3f;
-            fdc->ST0 |= 0x40;                            // AT
-            fdc->ST1 |= 0x10;                            // set OverRun bit (Lost Data bit)
-            fdc->MainStatusReg &= 0xdf;      // clear Execution mode
+            AND(&ctx, ctx.edi.ctrl->ST0, 0x3f);
+            OR(&ctx, ctx.edi.ctrl->ST0, 0x40); // AT
+            OR(&ctx, ctx.edi.ctrl->ST1, 0x10); // set OverRun bit (Lost Data bit)
+            AND(&ctx, ctx.edi.ctrl->MainStatusReg, 0xdf); // clear Execution mode
 
             // do after clearing execution mode in MSR, fixes Italia 1990
-            //pushad
-            Context ctx;
-            ctx.edi.ctrl = fdc;
-            ctx.esp.e = 0;
-            ctx.eax.e = fdc->FDCReturn;
-            fdc->FDCVector = ctx.eax.e;
+            Context ad = ctx;
+            ctx.eax.e = ctx.edi.ctrl->FDCReturn;
+            ctx.edi.ctrl->FDCVector = ctx.eax.e;
             run(&ctx, ctx.eax.e);
-            //popad
+            ctx = ad;
         }
         else {
-            fdc->OverRunCounter--;
+            DEC(&ctx, ctx.edi.ctrl->OverRunCounter);
         }
     }
 
-    return fdc->MainStatusReg;
+    ctx.eax.l = ctx.edi.ctrl->MainStatusReg;
+    return ctx.eax.l;
 }
 
-uint8_t U765_FUNCTION(u765_DataPortRead)(u765_Controller* fdc) {
-    uint8_t al = fdc->MainStatusReg;
-    al &= 192;
+uint8_t U765_FUNCTION(u765_DataPortRead)(u765_Controller* FdcHandle) {
+    Context ctx;
+    ctx.esp.e = 0;
+    ctx.edi.ctrl = FdcHandle;
+    ctx.eax.l = ctx.edi.ctrl->MainStatusReg;
+    AND(&ctx, ctx.eax.l, 192);
 
-    if (al == 192) {
-        //pushad
-        Context ctx;
-        ctx.edi.ctrl = fdc;
-        ctx.esp.e = 0;
-        run(&ctx, fdc->FDCVector);
-        //popad
-        al = fdc->Byte_3FFD;
+    if (ctx.eax.l == 192) {
+        Context ad = ctx;
+        run(&ctx, ctx.edi.ctrl->FDCVector);
+        ctx = ad;
+        ctx.eax.l = ctx.edi.ctrl->Byte_3FFD;
     }
 
-    return al;
+    return ctx.eax.l;
 }
 
-void U765_FUNCTION(u765_DataPortWrite)(u765_Controller* fdc, uint8_t fdc_data_out) {
-    fdc->Byte_3FFD = fdc_data_out;
+void U765_FUNCTION(u765_DataPortWrite)(u765_Controller* FdcHandle, uint8_t DataByte) {
+    Context ctx;
+    ctx.esp.e = 0;
+    ctx.edi.ctrl = FdcHandle;
 
-    uint8_t al = fdc->MainStatusReg;
-    al &= 192;
+    ctx.eax.l = DataByte;
+    ctx.edi.ctrl->Byte_3FFD = ctx.eax.l;
 
-    if (al == 128) {
-        //pushad
-        Context ctx;
-        ctx.edi.ctrl = fdc;
-        ctx.esp.e = 0;
-        run(&ctx, fdc->FDCVector);
-        //popad
-    }
-}
+    ctx.eax.l = ctx.edi.ctrl->MainStatusReg;
+    AND(&ctx, ctx.eax.l, 192);
 
-void U765_FUNCTION(u765_SetActiveCallback)(u765_Controller* fdc, void (*callback)(void)) {
-    fdc->ActiveCallback = callback;
-}
-
-void U765_FUNCTION(u765_SetCommandCallback)(u765_Controller* fdc, void (*callback)(uint8_t const*, uint8_t)) {
-    fdc->CommandCallback = callback;
-}
-
-bool U765_FUNCTION(u765_DiskInserted)(u765_Controller* fdc, uint8_t unit) {
-    u765_DiskUnit* disk = GetUnitPtr(fdc, unit);
-    // SetLastError(disk->Filename);
-    return disk->DiskInserted;    // true if disk inserted, else false
-}
-
-void U765_FUNCTION(u765_SetRandomMethod)(u765_Controller* fdc, uint8_t rndmethod) {
-    if ((rndmethod == 255) || (rndmethod <= 2)) {
-        fdc->DskRndMethod = rndmethod;
+    if (ctx.eax.l == 128) {
+        Context ad = ctx;
+        run(&ctx, ctx.edi.ctrl->FDCVector);
+        ctx = ad;
     }
 }
 
-void U765_FUNCTION(u765_GetFDCState)(u765_Controller* fdc, u765_State* state) {
-    state->MSR = fdc->MainStatusReg;
-    state->ST0 = fdc->ST0;
-    state->ST1 = fdc->ST1;
-    state->ST2 = fdc->ST2;
-    state->ST3 = fdc->ST3;
+u765_Controller* U765_FUNCTION(u765_Initialise)(void) {
+    Context ctx;
+    ctx.esp.e = 0;
 
-    state->Unit0_CTRK = fdc->FDDUnit0.CTK;
-    state->Unit0_CHEAD = fdc->FDDUnit0.CHEAD;
-    state->Unit0_CSR = fdc->FDDUnit0.CSR;
+    ctx.eax.ctrl = (u765_Controller*)calloc(sizeof(u765_Controller), 1);
 
-    state->Unit1_CTRK = fdc->FDDUnit1.CTK;
-    state->Unit1_CHEAD = fdc->FDDUnit1.CHEAD;
-    state->Unit1_CSR = fdc->FDDUnit1.CSR;
+    if (ctx.eax.ctrl != NULL) {
+        LowLevelInitialise(&ctx, ctx.eax.ctrl);
+    }
+
+    return ctx.eax.ctrl;
+}
+
+void U765_FUNCTION(u765_Shutdown)(u765_Controller* FdcHandle) {
+    u765_EjectDisk(FdcHandle, 0);
+    u765_EjectDisk(FdcHandle, 1);
+    free(FdcHandle);
+}
+
+void U765_FUNCTION(u765_ResetDevice)(u765_Controller* FdcHandle) {
+    Context ctx;
+    ctx.esp.e = 0;
+
+    ctx.eax.ctrl = FdcHandle;
+    LowLevelInitialise(&ctx, ctx.eax.ctrl);
+}
+
+void U765_FUNCTION(u765_InsertDisk)(u765_Controller* FdcHandle, char const* lpFilename, uint8_t Unit) {
+    Context ctx;
+    ctx.esp.e = 0;
+
+    ctx.edi.ctrl = FdcHandle;
+
+    u765_EjectDisk(ctx.edi.ctrl, Unit); // close any open disk on this unit
+
+    GetUnitPtr(&ctx, Unit);
+    ctx.ebx = ctx.eax;
+
+    ctx.ebx.disk->EDSK = false;
+    ctx.ebx.disk->DiskInserted = false;
+    ctx.ebx.disk->ContentsChanged = false;
+
+    ctx.ebx.disk->WriteProtect = false;
+
+    ctx.eax.fp = fopen(lpFilename, "r+b");
+
+    if (ctx.eax.fp == NULL) {
+        ctx.ebx.disk->WriteProtect = true;
+        ctx.eax.fp = fopen(lpFilename, "rb");
+
+        if (ctx.eax.fp == NULL) {
+            ctx.ebx.disk->DiskFileHandle = NULL;
+            return;
+        }
+    }
+
+    ctx.ebx.disk->DiskFileHandle = ctx.eax.fp;
+
+    struct stat buf;
+
+    if (stat(lpFilename, &buf) != 0) {
+        u765_EjectDisk(FdcHandle, Unit);
+        return;
+    }
+
+    ctx.ebx.disk->DiskArrayLen = buf.st_size;
+    ctx.ebx.disk->DiskArrayPtr = calloc(1, buf.st_size);
+
+    if (ctx.ebx.disk->DiskArrayPtr == NULL) {
+        u765_EjectDisk(FdcHandle, Unit);
+        return;
+    }
+
+    size_t const numread = fread(ctx.ebx.disk->DiskArrayPtr, 1, ctx.ebx.disk->DiskArrayLen, ctx.ebx.disk->DiskFileHandle);
+
+    if (numread != ctx.ebx.disk->DiskArrayLen) {
+        u765_EjectDisk(FdcHandle, Unit);
+        return;
+    }
+
+    ctx.ebx.disk->DiskInserted = true;
+    ctx.ebx.disk->DriveStateChanged = true;
+
+    ctx.eax.u8 = ctx.ebx.disk->DiskArrayPtr;
+
+    if (*ctx.eax.u8 == 'E') {
+        EDsk2Dsk(&ctx, Unit);
+    }
+
+    Context ad = ctx;
+    ctx.esi.ptr = ctx.ebx.disk->DiskArrayPtr;
+    ctx.edi.ptr = ctx.ebx.disk->DiskBlock.DiskInfoBlock;
+    ctx.ecx.e = 256 / 4;
+    rep_movsd(&ctx);
+
+    // copy filename into Unit structure
+    ctx.esi.u8 = (uint8_t*)lpFilename;
+    ctx.edi.u8 = (uint8_t*)ctx.ebx.disk->Filename;
+loop:
+    ctx.eax.l = *ctx.esi.u8++;
+    *ctx.edi.u8++ = ctx.eax.l;
+    OR(&ctx, ctx.eax.l, ctx.eax.l);
+    JNE(&ctx, loop);
+    ctx = ad;
+
+    ctx.ebx.disk->ContentsChanged = false;
+    LowLevelInitialise(&ctx, FdcHandle);
+}
+
+void U765_FUNCTION(u765_EjectDisk)(u765_Controller* FdcHandle, uint8_t Unit) {
+    Context ctx;
+    ctx.esp.e = 0;
+
+    ctx.edi.ctrl = FdcHandle;
+
+    GetUnitPtr(&ctx, Unit);
+    ctx.ebx = ctx.eax;
+
+    if (ctx.ebx.disk->DiskFileHandle != NULL) {
+        WriteCurrentDisk(&ctx, FdcHandle, Unit);
+
+        if (ctx.ebx.disk->DiskArrayPtr != NULL) {
+            free(ctx.ebx.disk->DiskArrayPtr);
+            ctx.ebx.disk->DiskArrayPtr = NULL;
+        }
+
+        fclose(ctx.ebx.disk->DiskFileHandle);
+        ctx.ebx.disk->DiskFileHandle = NULL;
+        ctx.ebx.disk->DiskInserted = false;
+    }
+
+    LowLevelInitialise(&ctx, FdcHandle);
+}
+
+bool U765_FUNCTION(u765_DiskInserted)(u765_Controller* FdcHandle, uint8_t Unit) {
+    Context ctx;
+    ctx.esp.e = 0;
+
+    ctx.edi.ctrl = FdcHandle;
+
+    GetUnitPtr(&ctx, Unit);
+    ctx.ebx = ctx.eax;
+
+    // lea     eax, [ebx].TFDDUnit.Filename
+    // invoke  SetLastError, eax
+
+    ctx.eax.e = ctx.ebx.disk->DiskInserted;
+    return ctx.eax.e != 0;    // true if disk inserted, else false
+}
+
+void U765_FUNCTION(u765_GetFDCState)(u765_Controller* FdcHandle, u765_State* lpFDCState) {
+    Context ctx;
+    ctx.esp.e = 0;
+
+    ctx.ecx.ctrl = FdcHandle;
+    ctx.edx.stat = lpFDCState;
+
+    ctx.eax.l = ctx.ecx.ctrl->MainStatusReg;
+    ctx.edx.stat->MSR = ctx.eax.l;
+    ctx.eax.l = ctx.ecx.ctrl->ST0;
+    ctx.edx.stat->ST0 = ctx.eax.l;
+    ctx.eax.l = ctx.ecx.ctrl->ST1;
+    ctx.edx.stat->ST1 = ctx.eax.l;
+    ctx.eax.l = ctx.ecx.ctrl->ST2;
+    ctx.edx.stat->ST2 = ctx.eax.l;
+    ctx.eax.l = ctx.ecx.ctrl->ST3;
+    ctx.edx.stat->ST3 = ctx.eax.l;
+
+    ctx.eax.l = ctx.ecx.ctrl->FDDUnit0.CTK;
+    ctx.edx.stat->Unit0_CTRK = ctx.eax.l;
+    ctx.eax.l = ctx.ecx.ctrl->FDDUnit0.CHEAD;
+    ctx.edx.stat->Unit0_CHEAD = ctx.eax.l;
+    ctx.eax.l = ctx.ecx.ctrl->FDDUnit0.CSR;
+    ctx.edx.stat->Unit0_CSR = ctx.eax.l;
+
+    ctx.eax.l = ctx.ecx.ctrl->FDDUnit1.CTK;
+    ctx.edx.stat->Unit1_CTRK = ctx.eax.l;
+    ctx.eax.l = ctx.ecx.ctrl->FDDUnit1.CHEAD;
+    ctx.edx.stat->Unit1_CHEAD = ctx.eax.l;
+    ctx.eax.l = ctx.ecx.ctrl->FDDUnit1.CSR;
+    ctx.edx.stat->Unit1_CSR = ctx.eax.l;
 }
 
 /*-----------------------------------------------------------------------------
@@ -406,88 +530,68 @@ enum {
     case_WriteCurrTrack,
     case_WriteSectorData,
     case_WriteSectorData_1,
-    case_WSD_WProt
+    case_WSD_WProt,
 };
 
-#define ARG(ctx, index) ((ctx)->stack[(ctx)->esp.e + (index)])
-#define PUSH(ctx, val) do { (ctx)->stack[(ctx)->esp.e++] = val; } while (0)
-#define POP(ctx) ((ctx)->stack[--(ctx)->esp.e])
-#define CALL(ctx, label) do { run((ctx), (label)); } while (0)
-#define CMP(ctx, left, right) do { ctx->zero = ((left) == (right)); ctx->carry = ((left) < (right)); } while (0)
-#define TEST(ctx, left, right) do { ctx->zero = ((left) & (right)) == 0; } while (0)
-#define JE(ctx, label) do { if (ctx->zero) goto label; } while (0)
-#define JNE(ctx, label) do { if (!ctx->zero) goto label; } while (0)
-#define JNZ JNE
-#define JC(ctx, label) do { if (ctx->carry) goto label; } while (0)
-#define JNC(ctx, label) do { if (!ctx->carry) goto label; } while (0)
-#define JA(ctx, label) do { if (!ctx->zero && !ctx->carry) goto label; } while (0)
-#define JPREG(ctx, val) do { label = (val); goto again; } while (0)
-#define SETNE(ctx) (!ctx->zero)
-#define READW(ptr) ((ptr)[0] | (uint16_t)(ptr)[1] << 8)
-#define WRITEW(ptr, val) do { (ptr)[0] = (uint8_t)(val); (ptr)[1] = (uint8_t)((val) >> 8); } while (0)
-#define READDW(ptr) ((ptr)[0] | (uint32_t)(ptr)[1] << 8 | (uint32_t)(ptr)[2] << 16 | (uint32_t)(ptr)[3] << 24)
-#define WRITEDW(ptr, val) do { (ptr)[0] = (uint8_t)(val); (ptr)[1] = (uint8_t)((val) >> 8); (ptr)[2] = (uint8_t)((val) >> 16); (ptr)[3] = (uint8_t)((val) >> 24); } while (0)
-
-static void rep_movsb(Context* ctx) {
-    memcpy(ctx->edi.u8, ctx->esi.u8, ctx->ecx.e);
-    ctx->edi.u8 += ctx->ecx.e;
-    ctx->esi.u8 += ctx->ecx.e;
-    ctx->ecx.e = 0;
+static void LowLevelInitialise(Context* ctx, u765_Controller* FdcHandle) {
+    ctx->eax.ctrl = FdcHandle;
+    ctx->eax.ctrl->MotorState = 0;
+    ctx->eax.ctrl->FDCVector = case_FDC_NewCommand;
+    ctx->eax.ctrl->MainStatusReg = 0x80; // 10000000b
+    ctx->eax.ctrl->FDDUnit0.SeekDone = false;
+    ctx->eax.ctrl->FDDUnit1.SeekDone = false;
+    ctx->eax.ctrl->FDDUnit0.CTK = 0;
+    ctx->eax.ctrl->FDDUnit1.CTK = 0;
+    ctx->eax.ctrl->FDDUnit0.CHEAD = 0;
+    ctx->eax.ctrl->FDDUnit1.CHEAD = 0;
+    OR(ctx, ctx->eax.ctrl->ST3, 0x20); // 00100000b
+    ctx->eax.ctrl->FDCRandomSeed = 0;
 }
 
-static void rep_movsd(Context* ctx) {
-    ctx->ecx.e *= 4;
-    rep_movsb(ctx);
+static void FDCCommandCallback(Context* ctx, uint8_t NumCmdBytes) {
+    if (ctx->edi.ctrl->CommandCallback != NULL) {
+        Context ad = *ctx;
+        ctx->eax.e = NumCmdBytes;
+        PUSH(ctx, ctx->eax);
+        ctx->eax.u8 = &ctx->edi.ctrl->FDCCommandByte;
+        PUSH(ctx, ctx->eax);
+        ctx->edi.ctrl->CommandCallback(ARG(ctx, -1).u8, ARG(ctx, -2).l);
+        *ctx = ad;
+    }
 }
 
-static u765_DiskUnit* GetUnitPtr(u765_Controller* fdc, uint8_t unit) {
-    unit &= 1;
+static void GetUnitPtr(Context* ctx, uint8_t Unit) {
+    AND(ctx, Unit, 1);
 
-    if (unit == 0) {
-        return &fdc->FDDUnit0;
+    if (Unit == 0) {
+        ctx->eax.disk = &ctx->edi.ctrl->FDDUnit0;
     }
     else {
-        return &fdc->FDDUnit1;
+        ctx->eax.disk = &ctx->edi.ctrl->FDDUnit1;
     }
 }
 
-static void LowLevelInitialise(u765_Controller* fdc) {
-    fdc->MotorState = 0;
-    fdc->FDCVector = case_FDC_NewCommand;
-    fdc->MainStatusReg = 0x80;
-    fdc->FDDUnit0.SeekDone = false;
-    fdc->FDDUnit1.SeekDone = false;
-    fdc->FDDUnit0.CTK = 0;
-    fdc->FDDUnit1.CTK = 0;
-    fdc->FDDUnit0.CHEAD = 0;
-    fdc->FDDUnit1.CHEAD = 0;
-    fdc->ST3 |= 0x20;
-    fdc->FDCRandomSeed = 0;
-}
+static void WriteCurrentDisk(Context* ctx, u765_Controller* FdcHandle, uint8_t Unit) {
+    ctx->edi.ctrl = FdcHandle;
 
-static void WriteCurrentDisk(u765_Controller* fdc, uint8_t unit) {
-    u765_DiskUnit* disk = GetUnitPtr(fdc, unit);
+    GetUnitPtr(ctx, Unit);
+    ctx->ebx = ctx->eax;
 
-    if (disk->DiskFileHandle != NULL) {
-        if (!disk->WriteProtect && disk->ContentsChanged) {
-            fwrite(disk->DiskArrayPtr, 1, disk->DiskArrayLen, disk->DiskFileHandle);
-            disk->ContentsChanged = false;
+    if (ctx->ebx.disk->DiskFileHandle != NULL) {
+        if (ctx->ebx.disk->WriteProtect == false && ctx->ebx.disk->ContentsChanged == true) {
+            fwrite(ctx->ebx.disk->DiskArrayPtr, 1, ctx->ebx.disk->DiskArrayLen, ctx->ebx.disk->DiskFileHandle);
+            ctx->ebx.disk->ContentsChanged = false;
         }
     }
 }
 
-static void EDsk2Dsk(u765_Controller* fdc, uint8_t unit) {
-    Context the_ctx;
-    Context* ctx = &the_ctx;
-    ctx->edi.ctrl = fdc;
-    ctx->esp.e = 0;
-
+static void EDsk2Dsk(Context* ctx, uint8_t unit) {
     uint8_t NumTracks, NumSectors, NumSides;
     uint32_t F, G, SectorLen, DOffset, DskOffset, EDskOffset, MaxTrackLen;
     void* DskArray;
 
-    ctx->eax.disk = GetUnitPtr(ctx->edi.ctrl, unit);
-    ctx->ebx.disk = ctx->eax.disk;
+    GetUnitPtr(ctx, unit);
+    ctx->ebx = ctx->eax;
 
     ctx->ebx.disk->EDSK = true;
 
@@ -513,7 +617,7 @@ static void EDsk2Dsk(u765_Controller* fdc, uint8_t unit) {
 
     for (int loop_counter = ctx->eax.e; loop_counter >= 0; loop_counter--) {
         ctx->eax.e = ctx->esi.u8[ctx->ecx.e];
-        ctx->ecx.e++;
+        INC(ctx, ctx->ecx.e);
 
         if (ctx->eax.e > MaxTrackLen) {
             MaxTrackLen = ctx->eax.e;
@@ -530,8 +634,8 @@ static void EDsk2Dsk(u765_Controller* fdc, uint8_t unit) {
     ctx->eax.e &= 0xffff;
     ctx->ecx.e = MaxTrackLen;
     ctx->eax.e *= ctx->ecx.e;
-    ctx->eax.e += 256;
-    ctx->eax.e += 100000;         // add safe space beyond disk space
+    ADD(ctx, ctx->eax.e, 256);
+    ADD(ctx, ctx->eax.e, 100000);         // add safe space beyond disk space
 
     ctx->eax.ptr = malloc(ctx->eax.e);
 
@@ -554,7 +658,7 @@ static void EDsk2Dsk(u765_Controller* fdc, uint8_t unit) {
     ctx->eax.l = NumSides;
     ctx->edi.u8[0x31] = ctx->eax.l;
     ctx->eax.e = MaxTrackLen;
-    ctx->edi.u8[0x32] = ctx->eax.x;
+    WRITEW(&ctx->edi.u8[0x32], ctx->eax.x);
 
     // and start gathering tracks from offset $100 (tracks start there, immediately after the header).
     EDskOffset = 0x100;
@@ -572,7 +676,7 @@ static void EDsk2Dsk(u765_Controller* fdc, uint8_t unit) {
         ctx->eax.e = F;
         ctx->ecx.e = MaxTrackLen;
         ctx->eax.e *= ctx->ecx.e;
-        ctx->eax.e += 0x100;
+        ADD(ctx, ctx->eax.e, 0x100);
         DskOffset = ctx->eax.e;
 
         // Number of sectors in this track.
@@ -599,16 +703,16 @@ static void EDsk2Dsk(u765_Controller* fdc, uint8_t unit) {
 
                 ctx->ecx.e = NumSectors;
                 ctx->ecx.e <<= 3;
-                ctx->ecx.e += 0x18;
+                ADD(ctx, ctx->ecx.e, 0x18);
                 rep_movsb(ctx);
 
                 // Now copy the sector data itself. Edsk has varying lengths, dsk does not.
 
                 // Sectors begin 256 bytes after the start of the track
-                DskOffset += 0x100;
+                ADD(ctx, DskOffset, 0x100);
 
                 ctx->eax.e = EDskOffset;
-                ctx->eax.e += 0x100;
+                ADD(ctx, ctx->eax.e, 0x100);
                 DOffset = ctx->eax.e;
 
                 G = 0;
@@ -618,8 +722,8 @@ static void EDsk2Dsk(u765_Controller* fdc, uint8_t unit) {
                     // The edsk's sector length is found in the Sector Info List
                     ctx->eax.e = G;
                     ctx->eax.e <<= 3;
-                    ctx->eax.e += 30;
-                    ctx->eax.e += EDskOffset;
+                    ADD(ctx, ctx->eax.e, 30);
+                    ADD(ctx, ctx->eax.e, EDskOffset);
                     ctx->esi.u8 = ctx->ebx.disk->DiskArrayPtr;
                     ctx->esi.u8 += ctx->eax.e;
                     ctx->eax.e = READW(ctx->esi.u8);
@@ -633,19 +737,19 @@ static void EDsk2Dsk(u765_Controller* fdc, uint8_t unit) {
                         ctx->edi.u8 += DskOffset;
                         
                         ctx->ecx.e = SectorLen;
-                        DOffset += ctx->ecx.e;
+                        ADD(ctx, DOffset, ctx->ecx.e);
                         ctx->ecx.e >>= 2;
                         rep_movsd(ctx);
                         ctx->ecx.e = SectorLen;
-                        ctx->ecx.e &= 3;
+                        AND(ctx, ctx->ecx.e, 3);
                         rep_movsb(ctx);
                     }
 
                     // Move to the next sector
                     ctx->eax.e = SectorLen;
-                    DskOffset += ctx->eax.e;
+                    ADD(ctx, DskOffset, ctx->eax.e);
 
-                    G++;
+                    INC(ctx, G);
                 }
             }
 
@@ -655,10 +759,10 @@ static void EDsk2Dsk(u765_Controller* fdc, uint8_t unit) {
             ctx->esi.u8 += 0x34;
             ctx->eax.e = *ctx->esi.u8;
             ctx->eax.e <<= 8;
-            EDskOffset += ctx->eax.e;
+            ADD(ctx, EDskOffset, ctx->eax.e);
         }
 
-        F++;
+        INC(ctx, F);
     }
 
     free(ctx->ebx.disk->DiskArrayPtr);
@@ -668,15 +772,9 @@ static void EDsk2Dsk(u765_Controller* fdc, uint8_t unit) {
     ctx->ebx.disk->WriteProtect = true;
 }
 
-static void SetFastDisk(u765_Controller* fdc) {
-    if (fdc->ActiveCallback != NULL) {
-        fdc->ActiveCallback();
-    }
-}
-
-static void FDCCommandCallback(u765_Controller* fdc, uint8_t num_cmd_bytes) {
-    if (fdc->CommandCallback != NULL) {
-        fdc->CommandCallback(&fdc->FDCCommandByte, num_cmd_bytes);
+static void SetFastDisk(Context* ctx) {
+    if (ctx->edi.ctrl->ActiveCallback != NULL) {
+        ctx->edi.ctrl->ActiveCallback();
     }
 }
 
@@ -689,7 +787,7 @@ static void InitFDC(Context* ctx) {
 
     // call command callback with no cmd executing
     ctx->edi.ctrl->FDCCommandByte = 0;         // no command executing
-    FDCCommandCallback(ctx->edi.ctrl, 1);
+    FDCCommandCallback(ctx, 1);
 }
 
 static void run(Context* ctx, unsigned label) {
@@ -755,7 +853,15 @@ again:
             }
 
         case case_InitFDC: label_InitFDC:
-            InitFDC(ctx);
+            ctx->edi.ctrl->LED = 0;
+            ctx->edi.ctrl->FDCVector = case_FDC_NewCommand;
+            ctx->edi.ctrl->OverRunTest = false;
+            ctx->edi.ctrl->OverRunError = false;
+            ctx->edi.ctrl->MainStatusReg = 128; // FDC is ready for a new command
+
+            // call command callback with no cmd executing
+            ctx->edi.ctrl->FDCCommandByte = 0; // no command executing
+            FDCCommandCallback(ctx, 1);
             return;
 
         // this subroutine traps standard errors in FDC commands
@@ -765,7 +871,7 @@ again:
         case case_TrapStandardErrors: label_TrapStandardErrors:
             ctx->edi.ctrl->TSEError = false;
 
-            ctx->eax.disk = GetUnitPtr(ctx->edi.ctrl, ctx->edi.ctrl->FDCParameters[0]); // CC1
+            GetUnitPtr(ctx, ctx->edi.ctrl->FDCParameters[0]); // CC1
             ctx->edi.ctrl->UnitPtr = ctx->eax.disk;  // ptr to currently selected unit
             ctx->ebx.disk = ctx->eax.disk;
 
@@ -780,7 +886,7 @@ again:
             CMP(ctx, ctx->edi.ctrl->MotorOffTimer, 0);     // if the motor off timer is zero
             JE(ctx, label_TSE_NotReady);              // then the drive is not ready
 
-            ctx->edi.ctrl->MotorOffTimer--;        // else decrement the motor timer
+            DEC(ctx, ctx->edi.ctrl->MotorOffTimer);        // else decrement the motor timer
             goto label_TSE_1;                     // and accept the command
 
         case case_TSE_NotReady: label_TSE_NotReady:
@@ -836,14 +942,14 @@ again:
             // fallthrough
 
         case case_FDC_ReadDataEntry: label_FDC_ReadDataEntry:
-            SetFastDisk(ctx->edi.ctrl);
+            SetFastDisk(ctx);
 
             ctx->edi.ctrl->FDCReturn = case_FDC_ReadData1;
             ctx->ecx.x = 8;                                   // expect 8 bytes
             goto label_ReceiveCommandBytes;
 
         case case_FDC_ReadData1: label_FDC_ReadData1:
-            FDCCommandCallback(ctx->edi.ctrl, 9);
+            FDCCommandCallback(ctx, 9);
 
             ctx->eax.l = ctx->edi.ctrl->FDCParameters[3];     // R param
             ctx->edi.ctrl->OriginalR = ctx->eax.l;                     // preserve R value
@@ -870,14 +976,14 @@ again:
             // fallthrough
 
         case case_FDC_WriteDataEntry: label_FDC_WriteDataEntry:
-            SetFastDisk(ctx->edi.ctrl);
+            SetFastDisk(ctx);
 
             ctx->edi.ctrl->FDCReturn = case_FDC_WriteData1;
             ctx->ecx.x = 8;                   // expect 8 bytes
             goto label_ReceiveCommandBytes;
 
         case case_FDC_WriteData1: label_FDC_WriteData1:
-            FDCCommandCallback(ctx->edi.ctrl, 9);
+            FDCCommandCallback(ctx, 9);
 
             ctx->eax.l = ctx->edi.ctrl->FDCParameters[3]; // R param
             ctx->edi.ctrl->OriginalR = ctx->eax.l;                // preserve R value
@@ -906,14 +1012,14 @@ again:
         // ######################################################################
 
         case case_FDC_ReadSectorID: label_FDC_ReadSectorID:
-            SetFastDisk(ctx->edi.ctrl);
+            SetFastDisk(ctx);
 
             ctx->edi.ctrl->FDCReturn = case_FDC_ReadSectorID1;
             ctx->ecx.x = 1;                   // expect 1 byte
             goto label_ReceiveCommandBytes;
 
         case case_FDC_ReadSectorID1: label_FDC_ReadSectorID1:
-            // FDCCommandCallback(ctx->edi.ctrl, 2);
+            // FDCCommandCallback(ctx, 2);
 
             ctx->edi.ctrl->MainStatusReg |= 16;       // FDC is busy
             ctx->edi.ctrl->ST2 = 0;
@@ -946,13 +1052,13 @@ again:
             CMP(ctx, ctx->edi.ctrl->RetCSR0, 0);
             JE(ctx, label_RSNoSec0);
 
-            ctx->edi.ctrl->RetCSR0--;
+            DEC(ctx, ctx->edi.ctrl->RetCSR0);
             ctx->ebx.disk->CSR = 0;
             // fallthrough
 
         case case_RSNoSec0: label_RSNoSec0:
             ctx->edx.l = ctx->ebx.disk->CSR;
-            ctx->edx.l++;
+            INC(ctx, ctx->edx.l);
             CMP(ctx, ctx->edx.l, ctx->ebx.disk->TrackBlock.NumSectors);
             JC(ctx, label_RSJmp1);
             ctx->edx.l ^= ctx->edx.l;
@@ -967,8 +1073,7 @@ again:
 
         case case_FDC_RdScL1: label_FDC_RdScL1:
             CALL(ctx, case_SkipNextSector);
-            ctx->edx.l--;
-            CMP(ctx, ctx->edx.l, 0);
+            DEC(ctx, ctx->edx.l);
             JNE(ctx, label_FDC_RdScL1);
             // fallthrough
 
@@ -1003,7 +1108,7 @@ again:
             ctx->eax.e = READDW(&ctx->edi.ctrl->FDCResults[3]);
             WRITEDW(&ctx->edi.ctrl->FDCCommandByte + 2, ctx->eax.e);
 
-            FDCCommandCallback(ctx->edi.ctrl, 6);   // 2 command bytes + CHRN early Results phase bytes);
+            FDCCommandCallback(ctx, 6);   // 2 command bytes + CHRN early Results phase bytes);
 
             // return Results phase bytes to CPU
             ctx->edi.ctrl->FDCReturn = case_FDC_ReadSectorID2;
@@ -1050,9 +1155,9 @@ again:
             goto label_ReceiveCommandBytes;
 
         case case_FDC_Recalibrate1: label_FDC_Recalibrate1:
-            FDCCommandCallback(ctx->edi.ctrl, 2);
+            FDCCommandCallback(ctx, 2);
 
-            ctx->eax.disk = GetUnitPtr(ctx->edi.ctrl, ctx->edi.ctrl->FDCParameters[0]);
+            GetUnitPtr(ctx, ctx->edi.ctrl->FDCParameters[0]);
             ctx->edi.ctrl->SeekUnitPtr = ctx->eax.disk;
             ctx->ebx.disk = ctx->eax.disk;
             // fallthrough
@@ -1075,7 +1180,7 @@ again:
 
         // Command = 8
         case case_FDC_SenseInterruptStatus: label_FDC_SenseInterruptStatus:
-            FDCCommandCallback(ctx->edi.ctrl, 1);
+            FDCCommandCallback(ctx, 1);
 
             ctx->edi.ctrl->MainStatusReg |= 16;       // FDC is busy
             ctx->esi.u8 = &ctx->edi.ctrl->FDCResults[0];
@@ -1138,7 +1243,7 @@ again:
             goto label_ReceiveCommandBytes;
 
         case case_FDC_Specify1: label_FDC_Specify1:
-            FDCCommandCallback(ctx->edi.ctrl, 3);
+            FDCCommandCallback(ctx, 3);
 
             ctx->edi.ctrl->ST0 &= 0x3f;
 
@@ -1153,13 +1258,13 @@ again:
             goto label_ReceiveCommandBytes;
 
         case case_FDC_SenseDriveStatus1: label_FDC_SenseDriveStatus1:
-            FDCCommandCallback(ctx->edi.ctrl, 2);
+            FDCCommandCallback(ctx, 2);
 
             ctx->edi.ctrl->MainStatusReg |= 16;       // FDC is busy
             ctx->edi.ctrl->ST3 = 0x40;                // assume write-protected here
 
-            ctx->eax.disk = GetUnitPtr(ctx->edi.ctrl, ctx->edi.ctrl->FDCParameters[0]);
-            ctx->ebx.disk = ctx->eax.disk;
+            GetUnitPtr(ctx, ctx->edi.ctrl->FDCParameters[0]);
+            ctx->ebx = ctx->eax;
 
             ctx->eax.l = ctx->edi.ctrl->FDCParameters[0];
             ctx->eax.l &= 3;
@@ -1213,13 +1318,13 @@ again:
             goto label_ReceiveCommandBytes;
 
         case case_FDC_Seek1: label_FDC_Seek1:
-            FDCCommandCallback(ctx->edi.ctrl, 3);
+            FDCCommandCallback(ctx, 3);
 
             ctx->edi.ctrl->SeekResult = 0x20;         // normal termination of seek
 
-            ctx->eax.disk = GetUnitPtr(ctx->edi.ctrl, ctx->edi.ctrl->FDCParameters[0]);
+            GetUnitPtr(ctx, ctx->edi.ctrl->FDCParameters[0]);
             ctx->edi.ctrl->SeekUnitPtr = ctx->eax.disk;
-            ctx->ebx.disk = ctx->eax.disk;
+            ctx->ebx = ctx->eax;
 
             ctx->eax.l = ctx->edi.ctrl->FDCParameters[1];  // C parameter
             CMP(ctx, ctx->eax.l, ctx->ebx.disk->DiskBlock.NumTracks);
@@ -1229,7 +1334,7 @@ again:
 
             // if seeking beyond the final cylinder then stop at final cylinder
             ctx->eax.l = ctx->ebx.disk->DiskBlock.NumTracks;
-            ctx->eax.l--;
+            DEC(ctx, ctx->eax.l);
             // fallthrough
 
         case case_STrk_Valid: label_STrk_Valid:
@@ -1250,7 +1355,7 @@ again:
         // ######################################################################
 
         case case_FDC_Version: label_FDC_Version:
-            FDCCommandCallback(ctx->edi.ctrl, 1);
+            FDCCommandCallback(ctx, 1);
 
             ctx->esi.u8 = &ctx->edi.ctrl->FDCResults[0];
             ctx->eax.l = 0x80;    // $80 = uPD765A identifier
@@ -1270,7 +1375,7 @@ again:
         // ######################################################################
 
         case case_FDC_Invalid: label_FDC_Invalid:
-            FDCCommandCallback(ctx->edi.ctrl, 1);
+            FDCCommandCallback(ctx, 1);
 
             ctx->esi.u8 = &ctx->edi.ctrl->FDCResults[0];
             ctx->eax.l = ctx->edi.ctrl->ST0;
@@ -1317,9 +1422,8 @@ again:
             ctx->edx.u8 = ctx->edi.ctrl->FDC_RCVDLoc;
             ctx->eax.l = ctx->edi.ctrl->Byte_3FFD;
             *ctx->edx.u8 = ctx->eax.l;
-            ctx->edi.ctrl->FDC_RCVDLoc++;
-            ctx->edi.ctrl->FDC_RCVDCnt--;
-            CMP(ctx, ctx->edi.ctrl->FDC_RCVDCnt, 0);
+            INC(ctx, ctx->edi.ctrl->FDC_RCVDLoc);
+            DEC(ctx, ctx->edi.ctrl->FDC_RCVDCnt);
             JE(ctx, label_FDC_ReceiveDataEnd);
             return;
 
@@ -1343,9 +1447,8 @@ again:
             ctx->esi.u8 = ctx->edi.ctrl->FDC_SENDLoc;
             ctx->eax.l = *ctx->esi.u8;
             ctx->edi.ctrl->Byte_3FFD = ctx->eax.l;
-            ctx->edi.ctrl->FDC_SENDLoc++;
-            ctx->edi.ctrl->FDC_SENDCnt--;
-            CMP(ctx, ctx->edi.ctrl->FDC_SENDCnt, 0);
+            INC(ctx, ctx->edi.ctrl->FDC_SENDLoc);
+            DEC(ctx, ctx->edi.ctrl->FDC_SENDCnt);
             JNE(ctx, label_FDC_SendData2);
 
             ctx->eax.e = ctx->edi.ctrl->FDCReturn;
@@ -1403,7 +1506,7 @@ again:
             ctx->ecx.u8 = &ctx->ebx.disk->TrackBlock.SectorData[0];
 
             ctx->edx.l = ctx->ebx.disk->CSR;
-            ctx->edx.l++;
+            INC(ctx, ctx->edx.l);
             CMP(ctx, ctx->edx.l, ctx->ebx.disk->TrackBlock.NumSectors);
             JC(ctx, label_IRSJmp1);
             ctx->edx.l ^= ctx->edx.l;
@@ -1418,8 +1521,7 @@ again:
 
         case case_IRSLoop: label_IRSLoop:
             CALL(ctx, case_SkipNextSector);
-            ctx->edx.l--;
-            CMP(ctx, ctx->edx.l, 0);
+            DEC(ctx, ctx->edx.l);
             JNE(ctx, label_IRSLoop);
             // fallthrough
 
@@ -1526,7 +1628,7 @@ again:
 
         // we have found the requested sector so transfer the sector data to the CPU
         case case_Rd_TransferData: label_Rd_TransferData:
-            ctx->edi.ctrl->SectorsRead++;    // sector counter for Read Track command
+            INC(ctx, ctx->edi.ctrl->SectorsRead);    // sector counter for Read Track command
             ctx->edi.ctrl->SectorToCPUReturn = case_LFRS_1;
             goto label_SectorDataToCPU;
 
@@ -1589,20 +1691,20 @@ again:
         // sector read so we reset the IndexHoleCount back to zero again
 
         case case_LFRS_4: label_LFRS_4:
-            ctx->edi.ctrl->FDCParameters[3]++;  // R parameter
+            INC(ctx, ctx->edi.ctrl->FDCParameters[3]);  // R parameter
             ctx->edi.ctrl->IndexHoleCount = 0;           // 1st revolution for this sector read
             goto label_InitReadSector;
 
         case case_SkipReadSector: label_SkipReadSector:
             CALL(ctx, case_AdvanceSectorPtrs);
 
-            ctx->ebx.disk->CSR++;                // move to the next physical sector
+            INC(ctx, ctx->ebx.disk->CSR);                // move to the next physical sector
             ctx->eax.l = ctx->ebx.disk->CSR;
             CMP(ctx, ctx->eax.l, ctx->ebx.disk->TrackBlock.NumSectors);
             JC(ctx, label_LocateReadSector);
 
             ctx->ebx.disk->CSR = -1;             // InitReadSector increments this to zero
-            ctx->edi.ctrl->IndexHoleCount++;
+            INC(ctx, ctx->edi.ctrl->IndexHoleCount);
             CMP(ctx, ctx->edi.ctrl->IndexHoleCount, 2);   // search for two disk revolutions
             JC(ctx, label_InitReadSector);
 
@@ -1682,7 +1784,7 @@ again:
                 CMP(ctx, ctx->eax.e, 2);
                 JC(ctx, label_SDTC_NormalRandom);  // normal random method if less than 2 sectors are available
 
-                ctx->edi.ctrl->MultipleSectorPick++;
+                INC(ctx, ctx->edi.ctrl->MultipleSectorPick);
                 if (ctx->edi.ctrl->MultipleSectorPick >= ctx->eax.e) {
                     ctx->edi.ctrl->MultipleSectorPick = 0;
                 }
@@ -1709,7 +1811,7 @@ again:
                 ctx->ecx = POP(ctx);
 
                 // if required, top up sector data with random bytes
-                ctx->ecx.e -= ctx->edx.e;    // ctx->ecx.e = top-up bytes required
+                SUB(ctx, ctx->ecx.e, ctx->edx.e);    // ctx->ecx.e = top-up bytes required
 
                 ctx->eax.l = ctx->edi.ctrl->FDCRandomSeed;
                 ctx->eax.h = 3;
@@ -1719,8 +1821,8 @@ again:
 
                 while  (ctx->ecx.e > 0) {
                     *ctx->edi.u8 = ctx->eax.l;
-                    ctx->eax.l += ctx->eax.h;
-                    ctx->ecx.e--;
+                    ADD(ctx, ctx->eax.l, ctx->eax.h);
+                    DEC(ctx, ctx->ecx.e);
                 }
                 ctx->edi.ctrl->FDCRandomSeed = ctx->eax.l;
                 ctx->edi = POP(ctx);
@@ -1737,7 +1839,7 @@ again:
 
                 // else now we need different methods of setting the random byte in this data stream
                 ctx->eax.l = ctx->edi.ctrl->FDCRandomSeed;
-                ctx->eax.l += 0x3;
+                ADD(ctx, ctx->eax.l, 0x03);
                 ctx->edi.ctrl->FDCRandomSeed = ctx->eax.l;
 
                 ctx->eax.h = ctx->edi.ctrl->DskRndMethod;
@@ -1781,7 +1883,7 @@ again:
 
         case case_SDTC_TransferData: label_SDTC_TransferData:
             if (ctx->edi.ctrl->SectorsTransferred > 0) {
-                FDCCommandCallback(ctx->edi.ctrl, 9);   // send a new callback for each successive sector read);
+                FDCCommandCallback(ctx, 9);   // send a new callback for each successive sector read);
             }
 
             // transfer CX bytes from [ESI] to Z80
@@ -1790,7 +1892,7 @@ again:
             goto label_FDC_SendData;               // transfer data to CPU
 
         case case_SectorDataToCPU_Done: label_SectorDataToCPU_Done:
-            ctx->edi.ctrl->SectorsTransferred++;    // count number of sectors sent each command
+            INC(ctx, ctx->edi.ctrl->SectorsTransferred);    // count number of sectors sent each command
 
             ctx->ebx.disk = ctx->edi.ctrl->UnitPtr;          // restore FDD Unit ptr
             ctx->eax.e = ctx->edi.ctrl->SectorToCPUReturn;
@@ -1881,7 +1983,7 @@ again:
             ctx->eax.e = ctx->edi.ctrl->CurrentSectorSize;
             ctx->edi.ctrl->CurrentSectorData += ctx->eax.e;
 
-            ctx->edi.ctrl->CurrentSectorNumber++;
+            INC(ctx, ctx->edi.ctrl->CurrentSectorNumber);
             ctx->eax.l = ctx->edi.ctrl->CurrentSectorNumber;
             CMP(ctx, ctx->eax.l, ctx->ebx.disk->TrackBlock.NumSectors);
             JNE(ctx, label_LocateFirstWriteSector);
@@ -1972,7 +2074,7 @@ again:
             // fallthrough
 
         case case_SkNxtSec1: label_SkNxtSec1:
-            ctx->ecx.e += ctx->eax.e;
+            ADD(ctx, ctx->ecx.e, ctx->eax.e);
             return;
 
         // ######################################################################
@@ -2015,10 +2117,9 @@ again:
             ctx->eax.l = *ctx->edi.u8;
             CMP(ctx, ctx->eax.l, *ctx->esi.u8);
             JNE(ctx, label_VTrk_Exit);
-            ctx->esi.u8++;
-            ctx->edi.u8++;
-            ctx->ecx.l--;
-            CMP(ctx, ctx->ecx.l, 0);
+            INC(ctx, ctx->esi.u8);
+            INC(ctx, ctx->edi.u8);
+            DEC(ctx, ctx->ecx.l);
             JNZ(ctx, label_VTrk_Loop);
             ctx->edx.l = true;
             // fallthrough
@@ -2054,14 +2155,13 @@ again:
             ctx->edx.x = ctx->ebx.disk->DiskBlock.TrackSize;
             ctx->edx.e &= 65535;
             ctx->ecx.l = ctx->ebx.disk->CTK;      // current physical track head is over
-            ctx->ecx.l++;
+            INC(ctx, ctx->ecx.l);
             // fallthrough
 
         case case_LocTrk1: label_LocTrk1:
-            ctx->ecx.l--;
-            CMP(ctx, ctx->ecx.l, 0);
+            DEC(ctx, ctx->ecx.l);
             JE(ctx, label_LockTrkDone);
-            ctx->eax.e += ctx->edx.e;
+            ADD(ctx, ctx->eax.e, ctx->edx.e);
             goto label_LocTrk1;
 
         case case_LockTrkDone: label_LockTrkDone:
@@ -2071,11 +2171,11 @@ again:
 
             CMP(ctx, ctx->ebx.disk->CHEAD, 1);
             JNE(ctx, label_LocSingleSide);
-            ctx->eax.e += ctx->edx.e;                  // add DiskBlock.TrackSize to skip to the interleaved track
+            ADD(ctx, ctx->eax.e, ctx->edx.e);                  // add DiskBlock.TrackSize to skip to the interleaved track
             // fallthrough
 
         case case_LocSingleSide: label_LocSingleSide:
-            ctx->eax.e += 0x100;    // and add the sizeof DiskInfoBlock
+            ADD(ctx, ctx->eax.e, 0x100);    // and add the sizeof DiskInfoBlock
             ctx->esi.u8 = ctx->ebx.disk->DiskArrayPtr;
             ctx->esi.u8 += ctx->eax.e;
             return;

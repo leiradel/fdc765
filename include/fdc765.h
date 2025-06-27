@@ -83,7 +83,7 @@ typedef struct {
     uint32_t CurrentSectorSize; // DWORD ?
     uint8_t* CurrentSectorData; // DWORD ?
     uint8_t* CurrentSectorInfo; // DWORD ?
-    uint32_t SectorToCPUReturn; // DWORD ?
+    unsigned SectorToCPUReturn; // DWORD ?
     unsigned CPUToSectorReturn; // DWORD ?
 
     unsigned FDCVector;       // DWORD ?     ; vector to FDC handler
@@ -182,20 +182,20 @@ typedef struct {
 u765_State;
 
 U765_EXPORT u765_Controller* U765_FUNCTION(u765_Initialise)(void);
-U765_EXPORT void U765_FUNCTION(u765_Shutdown)(u765_Controller* fdc);
-U765_EXPORT void U765_FUNCTION(u765_ResetDevice)(u765_Controller* fdc);
+U765_EXPORT void U765_FUNCTION(u765_Shutdown)(u765_Controller* FdcHandle);
+U765_EXPORT void U765_FUNCTION(u765_ResetDevice)(u765_Controller* FdcHandle);
 
-U765_EXPORT void U765_FUNCTION(u765_InsertDisk)(u765_Controller* fdc, char const* filename, uint8_t unit);
-U765_EXPORT void U765_FUNCTION(u765_EjectDisk)(u765_Controller* fdc, uint8_t unit);
-U765_EXPORT bool U765_FUNCTION(u765_GetMotorState)(u765_Controller* fdc);
-U765_EXPORT void U765_FUNCTION(u765_SetMotorState)(u765_Controller* fdc, uint8_t motor_state);
-U765_EXPORT uint8_t U765_FUNCTION(u765_StatusPortRead)(u765_Controller* fdc);
-U765_EXPORT uint8_t U765_FUNCTION(u765_DataPortRead)(u765_Controller* fdc);
-U765_EXPORT void U765_FUNCTION(u765_DataPortWrite)(u765_Controller* fdc, uint8_t fdc_data_out);
-U765_EXPORT void U765_FUNCTION(u765_SetActiveCallback)(u765_Controller* fdc, void (*callback)(void));
-U765_EXPORT void U765_FUNCTION(u765_SetCommandCallback)(u765_Controller* fdc, void (*callback)(uint8_t const*, uint8_t));
-U765_EXPORT bool U765_FUNCTION(u765_DiskInserted)(u765_Controller* fdc, uint8_t unit);
-U765_EXPORT void U765_FUNCTION(u765_SetRandomMethod)(u765_Controller* fdc, uint8_t rndmethod);
-U765_EXPORT void U765_FUNCTION(u765_GetFDCState)(u765_Controller* fdc, u765_State* state);
+U765_EXPORT void U765_FUNCTION(u765_InsertDisk)(u765_Controller* FdcHandle, char const* lpFilename, uint8_t Unit);
+U765_EXPORT void U765_FUNCTION(u765_EjectDisk)(u765_Controller* FdcHandle, uint8_t Unit);
+U765_EXPORT bool U765_FUNCTION(u765_GetMotorState)(u765_Controller* FdcHandle);
+U765_EXPORT void U765_FUNCTION(u765_SetMotorState)(u765_Controller* FdcHandle, uint8_t Value);
+U765_EXPORT uint8_t U765_FUNCTION(u765_StatusPortRead)(u765_Controller* FdcHandle);
+U765_EXPORT uint8_t U765_FUNCTION(u765_DataPortRead)(u765_Controller* FdcHandle);
+U765_EXPORT void U765_FUNCTION(u765_DataPortWrite)(u765_Controller* FdcHandle, uint8_t DataByte);
+U765_EXPORT void U765_FUNCTION(u765_SetActiveCallback)(u765_Controller* FdcHandle, void (*lpActiveCallback)(void));
+U765_EXPORT void U765_FUNCTION(u765_SetCommandCallback)(u765_Controller* FdcHandle, void (*lpCommandCallback)(uint8_t const*, uint8_t));
+U765_EXPORT bool U765_FUNCTION(u765_DiskInserted)(u765_Controller* FdcHandle, uint8_t Unit);
+U765_EXPORT void U765_FUNCTION(u765_SetRandomMethod)(u765_Controller* FdcHandle, uint8_t RndMethod);
+U765_EXPORT void U765_FUNCTION(u765_GetFDCState)(u765_Controller* FdcHandle, u765_State* lpFDCState);
 
 #endif // FDC765_H__
