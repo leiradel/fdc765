@@ -6,7 +6,7 @@ EXPORTS
     u765_EjectDisk = _u765_EjectDisk@8
     u765_GetFDCState = _u765_GetFDCState@8
     u765_GetMotorState = _u765_GetMotorState@4
-    u765_Initialise = _u765_Initialise@0
+    u765_Initialise = _u765_Initialise@8
     u765_InsertDisk = _u765_InsertDisk@12
     u765_ResetDevice = _u765_ResetDevice@4
     u765_SetActiveCallback = _u765_SetActiveCallback@8

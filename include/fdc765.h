@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef U765_EXPORTS
 #if defined(_WIN32) || defined(__CYGWIN__)
@@ -78,6 +79,8 @@ typedef enum {
 u765_WriteMode;
 
 typedef struct {
+    void* (*Realloc)(void*, size_t);
+
     uint8_t* FDC_RCVDLoc;       // DWORD ?
     uint8_t* FDC_SENDLoc;       // DWORD ?
     uint32_t CurrentSectorSize; // DWORD ?
@@ -181,7 +184,7 @@ typedef struct {
 }
 u765_State;
 
-U765_EXPORT u765_Controller* U765_FUNCTION(u765_Initialise)(void);
+U765_EXPORT void U765_FUNCTION(u765_Initialise)(u765_Controller* FdcHandle, void* (*lpRealloc)(void*, size_t));
 U765_EXPORT void U765_FUNCTION(u765_Shutdown)(u765_Controller* FdcHandle);
 U765_EXPORT void U765_FUNCTION(u765_ResetDevice)(u765_Controller* FdcHandle);
 U765_EXPORT void U765_FUNCTION(u765_InsertDisk)(u765_Controller* FdcHandle, char const* lpFilename, uint8_t Unit);

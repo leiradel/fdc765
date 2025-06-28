@@ -224,23 +224,26 @@ void U765_FUNCTION(u765_DataPortWrite)(u765_Controller* FdcHandle, uint8_t DataB
     }
 }
 
-u765_Controller* U765_FUNCTION(u765_Initialise)(void) {
+void U765_FUNCTION(u765_Initialise)(u765_Controller * FdcHandle, void* (*lpRealloc)(void*, size_t)) {
     Context ctx;
     ctx.esp.e = 0;
 
-    ctx.eax.ctrl = (u765_Controller*)calloc(sizeof(u765_Controller), 1);
-
-    if (ctx.eax.ctrl != NULL) {
-        LowLevelInitialise(&ctx, ctx.eax.ctrl);
+    ctx.eax.ctrl = FdcHandle;
+    memset(ctx.eax.ctrl, 0, sizeof(u765_Controller));
+    
+    if (lpRealloc != NULL) {
+        ctx.eax.ctrl->Realloc = lpRealloc;
+    }
+    else {
+        ctx.eax.ctrl->Realloc = realloc;
     }
 
-    return ctx.eax.ctrl;
+    LowLevelInitialise(&ctx, ctx.eax.ctrl);
 }
 
 void U765_FUNCTION(u765_Shutdown)(u765_Controller* FdcHandle) {
     u765_EjectDisk(FdcHandle, 0);
     u765_EjectDisk(FdcHandle, 1);
-    free(FdcHandle);
 }
 
 void U765_FUNCTION(u765_ResetDevice)(u765_Controller* FdcHandle) {
@@ -290,13 +293,14 @@ void U765_FUNCTION(u765_InsertDisk)(u765_Controller* FdcHandle, char const* lpFi
     }
 
     ctx.ebx.disk->DiskArrayLen = buf.st_size;
-    ctx.ebx.disk->DiskArrayPtr = calloc(1, buf.st_size);
+    ctx.ebx.disk->DiskArrayPtr = ctx.edi.ctrl->Realloc(NULL, ctx.ebx.disk->DiskArrayLen);
 
     if (ctx.ebx.disk->DiskArrayPtr == NULL) {
         u765_EjectDisk(FdcHandle, Unit);
         return;
     }
 
+    memset(ctx.ebx.disk->DiskArrayPtr, 0, ctx.ebx.disk->DiskArrayLen);
     size_t const numread = fread(ctx.ebx.disk->DiskArrayPtr, 1, ctx.ebx.disk->DiskArrayLen, ctx.ebx.disk->DiskFileHandle);
 
     if (numread != ctx.ebx.disk->DiskArrayLen) {
@@ -346,7 +350,7 @@ void U765_FUNCTION(u765_EjectDisk)(u765_Controller* FdcHandle, uint8_t Unit) {
         WriteCurrentDisk(&ctx, FdcHandle, Unit);
 
         if (ctx.ebx.disk->DiskArrayPtr != NULL) {
-            free(ctx.ebx.disk->DiskArrayPtr);
+            ctx.edi.ctrl->Realloc(ctx.ebx.disk->DiskArrayPtr, 0);
             ctx.ebx.disk->DiskArrayPtr = NULL;
         }
 
@@ -587,12 +591,12 @@ static void WriteCurrentDisk(Context* ctx, u765_Controller* FdcHandle, uint8_t U
     }
 }
 
-static void EDsk2Dsk(Context* ctx, uint8_t unit) {
+static void EDsk2Dsk(Context* ctx, uint8_t Unit) {
     uint8_t NumTracks, NumSectors, NumSides;
     uint32_t F, G, SectorLen, DOffset, DskOffset, EDskOffset, MaxTrackLen;
     void* DskArray;
 
-    GetUnitPtr(ctx, unit);
+    GetUnitPtr(ctx, Unit);
     ctx->ebx = ctx->eax;
 
     ctx->ebx.disk->EDSK = true;
@@ -639,7 +643,7 @@ static void EDsk2Dsk(Context* ctx, uint8_t unit) {
     ADD(ctx, ctx->eax.e, 256);
     ADD(ctx, ctx->eax.e, 100000);         // add safe space beyond disk space
 
-    ctx->eax.ptr = malloc(ctx->eax.e);
+    ctx->eax.ptr = ctx->edi.ctrl->Realloc(NULL, ctx->eax.e);
 
     DskArray = ctx->eax.ptr;
     if (ctx->eax.ptr == NULL) {
@@ -767,7 +771,7 @@ static void EDsk2Dsk(Context* ctx, uint8_t unit) {
         INC(ctx, F);
     }
 
-    free(ctx->ebx.disk->DiskArrayPtr);
+    ctx->edi.ctrl->Realloc(ctx->ebx.disk->DiskArrayPtr, 0);
     ctx->eax.ptr = DskArray;
     ctx->ebx.disk->DiskArrayPtr = ctx->eax.ptr;
 
