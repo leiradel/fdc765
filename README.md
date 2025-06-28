@@ -1,6 +1,6 @@
 # fdc765
 
-This code is a C port of the freeware fdc765.dll x86 assembly source code. The original author kindly provided the source code, but he has nothing to do with this port. All enquires about the code in this repository should be directed to me.
+This code is a C port of the freeware `fdc765.dll` x86 assembly source code. The original author kindly provided the source code, but he has nothing to do with this port. All enquires about the code in this repository should be directed to me.
 
 ## Build
 
