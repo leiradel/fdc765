@@ -27,6 +27,7 @@
         u765_Controller* ctrl; \
         u765_DiskUnit* disk; \
         u765_State* stat; \
+        FILE* fp; \
     } \
     Reg;
 #endif
