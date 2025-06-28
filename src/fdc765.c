@@ -14,7 +14,6 @@
         u765_Controller* ctrl; \
         u765_DiskUnit* disk; \
         u765_State* stat; \
-        FILE* fp; \
     } \
     Reg;
 #else
@@ -27,7 +26,6 @@
         u765_Controller* ctrl; \
         u765_DiskUnit* disk; \
         u765_State* stat; \
-        FILE* fp; \
     } \
     Reg;
 #endif
@@ -87,7 +85,6 @@ HIGH LEVEL INTERFACE
 -----------------------------------------------------------------------------*/
 
 static void LowLevelInitialise(Context*, u765_Controller*);
-static void WriteCurrentDisk(Context*, u765_Controller*, uint8_t);
 static void GetUnitPtr(Context*, uint8_t);
 static void EDsk2Dsk(Context*, uint8_t);
 static void run(Context*, unsigned);
@@ -254,7 +251,7 @@ void U765_FUNCTION(u765_ResetDevice)(u765_Controller* FdcHandle) {
     LowLevelInitialise(&ctx, ctx.eax.ctrl);
 }
 
-void U765_FUNCTION(u765_InsertDisk)(u765_Controller* FdcHandle, char const* lpFilename, uint8_t Unit) {
+void U765_FUNCTION(u765_InsertDisk)(u765_Controller* FdcHandle, const void* lpDisk, size_t Size, bool WriteProtect, uint8_t Unit) {
     Context ctx;
     ctx.esp.e = 0;
 
@@ -269,44 +266,9 @@ void U765_FUNCTION(u765_InsertDisk)(u765_Controller* FdcHandle, char const* lpFi
     ctx.ebx.disk->DiskInserted = false;
     ctx.ebx.disk->ContentsChanged = false;
 
-    ctx.ebx.disk->WriteProtect = false;
-
-    ctx.eax.fp = fopen(lpFilename, "r+b");
-
-    if (ctx.eax.fp == NULL) {
-        ctx.ebx.disk->WriteProtect = true;
-        ctx.eax.fp = fopen(lpFilename, "rb");
-
-        if (ctx.eax.fp == NULL) {
-            ctx.ebx.disk->DiskFileHandle = NULL;
-            return;
-        }
-    }
-
-    ctx.ebx.disk->DiskFileHandle = ctx.eax.fp;
-
-    struct stat buf;
-
-    if (stat(lpFilename, &buf) != 0) {
-        u765_EjectDisk(FdcHandle, Unit);
-        return;
-    }
-
-    ctx.ebx.disk->DiskArrayLen = buf.st_size;
-    ctx.ebx.disk->DiskArrayPtr = ctx.edi.ctrl->Realloc(NULL, ctx.ebx.disk->DiskArrayLen);
-
-    if (ctx.ebx.disk->DiskArrayPtr == NULL) {
-        u765_EjectDisk(FdcHandle, Unit);
-        return;
-    }
-
-    memset(ctx.ebx.disk->DiskArrayPtr, 0, ctx.ebx.disk->DiskArrayLen);
-    size_t const numread = fread(ctx.ebx.disk->DiskArrayPtr, 1, ctx.ebx.disk->DiskArrayLen, ctx.ebx.disk->DiskFileHandle);
-
-    if (numread != ctx.ebx.disk->DiskArrayLen) {
-        u765_EjectDisk(FdcHandle, Unit);
-        return;
-    }
+    ctx.ebx.disk->DiskArrayPtr = lpDisk;
+    ctx.ebx.disk->DiskArrayLen = Size;
+    ctx.ebx.disk->WriteProtect = WriteProtect;
 
     ctx.ebx.disk->DiskInserted = true;
     ctx.ebx.disk->DriveStateChanged = true;
@@ -323,16 +285,6 @@ void U765_FUNCTION(u765_InsertDisk)(u765_Controller* FdcHandle, char const* lpFi
     ctx.ecx.e = 256 / 4;
     rep_movsd(&ctx);
 
-    // copy filename into Unit structure
-    ctx.esi.u8 = (uint8_t*)lpFilename;
-    ctx.edi.u8 = (uint8_t*)ctx.ebx.disk->Filename;
-loop:
-    ctx.eax.l = *ctx.esi.u8++;
-    *ctx.edi.u8++ = ctx.eax.l;
-    OR(&ctx, ctx.eax.l, ctx.eax.l);
-    JNE(&ctx, loop);
-    ctx = ad;
-
     ctx.ebx.disk->ContentsChanged = false;
     LowLevelInitialise(&ctx, FdcHandle);
 }
@@ -346,18 +298,8 @@ void U765_FUNCTION(u765_EjectDisk)(u765_Controller* FdcHandle, uint8_t Unit) {
     GetUnitPtr(&ctx, Unit);
     ctx.ebx = ctx.eax;
 
-    if (ctx.ebx.disk->DiskFileHandle != NULL) {
-        WriteCurrentDisk(&ctx, FdcHandle, Unit);
-
-        if (ctx.ebx.disk->DiskArrayPtr != NULL) {
-            ctx.edi.ctrl->Realloc(ctx.ebx.disk->DiskArrayPtr, 0);
-            ctx.ebx.disk->DiskArrayPtr = NULL;
-        }
-
-        fclose(ctx.ebx.disk->DiskFileHandle);
-        ctx.ebx.disk->DiskFileHandle = NULL;
-        ctx.ebx.disk->DiskInserted = false;
-    }
+    ctx.ebx.disk->DiskArrayPtr = NULL;
+    ctx.ebx.disk->DiskInserted = false;
 
     LowLevelInitialise(&ctx, FdcHandle);
 }
@@ -574,20 +516,6 @@ static void GetUnitPtr(Context* ctx, uint8_t Unit) {
     }
     else {
         ctx->eax.disk = &ctx->edi.ctrl->FDDUnit1;
-    }
-}
-
-static void WriteCurrentDisk(Context* ctx, u765_Controller* FdcHandle, uint8_t Unit) {
-    ctx->edi.ctrl = FdcHandle;
-
-    GetUnitPtr(ctx, Unit);
-    ctx->ebx = ctx->eax;
-
-    if (ctx->ebx.disk->DiskFileHandle != NULL) {
-        if (ctx->ebx.disk->WriteProtect == false && ctx->ebx.disk->ContentsChanged == true) {
-            fwrite(ctx->ebx.disk->DiskArrayPtr, 1, ctx->ebx.disk->DiskArrayLen, ctx->ebx.disk->DiskFileHandle);
-            ctx->ebx.disk->ContentsChanged = false;
-        }
     }
 }
 

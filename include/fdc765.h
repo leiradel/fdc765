@@ -1,7 +1,6 @@
 #ifndef FDC765_H__
 #define FDC765_H__
 
-#include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -46,8 +45,7 @@ typedef struct {
 u765_TrackInfoBlock;
 
 typedef struct {
-    FILE* DiskFileHandle;    // DWORD ?         ; filehandle of inserted disk
-    void* DiskArrayPtr;      // DWORD ?         ; pointer to allocated memory   
+    void*   DiskArrayPtr;      // DWORD ?         ; pointer to allocated memory   
     size_t  DiskArrayLen;      // DWORD ?         ; sizeof allocated memory
     bool    DiskInserted;      // BYTE  ?         ; TRUE when disk is inserted in this drive
     bool    ContentsChanged;   // BYTE  ?         ; TRUE when this disk has been written to
@@ -58,7 +56,6 @@ typedef struct {
     uint8_t CHEAD;             // BYTE  ?         ; current head in operation for this command
     uint8_t CSR;               // BYTE  ?         ; current sector the head is over
     bool    SeekDone;          // BYTE  ?         ; TRUE if this drive has just completed a SEEK command
-    char    Filename[260];     // BYTE 260 dup(?) ; Null-terminated filename open on this unit
 
     u765_DiskInfoBlock  DiskBlock;  // TDSKInfoBlock   <>
     u765_TrackInfoBlock TrackBlock; // TTRKInfoBlock   <>
@@ -187,7 +184,7 @@ u765_State;
 U765_EXPORT void U765_FUNCTION(u765_Initialise)(u765_Controller* FdcHandle, void* (*lpRealloc)(void*, size_t));
 U765_EXPORT void U765_FUNCTION(u765_Shutdown)(u765_Controller* FdcHandle);
 U765_EXPORT void U765_FUNCTION(u765_ResetDevice)(u765_Controller* FdcHandle);
-U765_EXPORT void U765_FUNCTION(u765_InsertDisk)(u765_Controller* FdcHandle, char const* lpFilename, uint8_t Unit);
+U765_EXPORT void U765_FUNCTION(u765_InsertDisk)(u765_Controller* FdcHandle, const void* lpDisk, size_t Size, bool WriteProtect, uint8_t Unit);
 U765_EXPORT void U765_FUNCTION(u765_EjectDisk)(u765_Controller* FdcHandle, uint8_t Unit);
 U765_EXPORT bool U765_FUNCTION(u765_GetMotorState)(u765_Controller* FdcHandle);
 U765_EXPORT void U765_FUNCTION(u765_SetMotorState)(u765_Controller* FdcHandle, uint8_t Value);
