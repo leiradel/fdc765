@@ -185,6 +185,7 @@ U765_EXPORT void U765_FUNCTION(u765_Initialise)(u765_Controller* FdcHandle, void
 U765_EXPORT void U765_FUNCTION(u765_Shutdown)(u765_Controller* FdcHandle);
 U765_EXPORT void U765_FUNCTION(u765_ResetDevice)(u765_Controller* FdcHandle);
 U765_EXPORT void U765_FUNCTION(u765_InsertDisk)(u765_Controller* FdcHandle, const void* lpDisk, size_t Size, bool WriteProtect, uint8_t Unit);
+U765_EXPORT bool U765_FUNCTION(u765_ContentsChanged)(u765_Controller* FdcHandle, uint8_t Unit);
 U765_EXPORT void U765_FUNCTION(u765_EjectDisk)(u765_Controller* FdcHandle, uint8_t Unit);
 U765_EXPORT bool U765_FUNCTION(u765_GetMotorState)(u765_Controller* FdcHandle);
 U765_EXPORT void U765_FUNCTION(u765_SetMotorState)(u765_Controller* FdcHandle, uint8_t Value);
