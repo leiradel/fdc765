@@ -289,6 +289,10 @@ void U765_FUNCTION(u765_InsertDisk)(u765_Controller* FdcHandle, const void* lpDi
     LowLevelInitialise(&ctx, FdcHandle);
 }
 
+U765_EXPORT bool U765_FUNCTION(u765_WriteProtected)(u765_Controller* FdcHandle, uint8_t Unit) {
+    return Unit == 0 ? FdcHandle->FDDUnit0.WriteProtect : FdcHandle->FDDUnit1.WriteProtect;
+}
+
 bool U765_FUNCTION(u765_ContentsChanged)(u765_Controller* FdcHandle, uint8_t Unit) {
     return Unit == 0 ? FdcHandle->FDDUnit0.ContentsChanged : FdcHandle->FDDUnit1.ContentsChanged;
 }
