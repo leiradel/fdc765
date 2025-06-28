@@ -12,7 +12,7 @@ Just include `fdc765.h` in your code, and link against the shared object or Wind
 
 ## Translation to C
 
-The original source code kept part of the emulation state as code addresses that were jumped to at the required times. While this is fine in assembly, this makes the code hard to port to C. The objective of this port was to make a C replacement that could be used in places where the original x86 DLL wouldn't work. Porting to higher level constructs was NOT one of the objectives.
+The original source code kept part of the emulation state as code addresses that were jumped to at the required times. While this is fine in assembly, this makes the code hard to port to C. The objective of this port was to make a C replacement that could be used in places where the original x86 DLL wouldn't work. Porting to higher level constructs was NOT one of the objectives. Most of the translation was done with regexes.
 
 So, to minimize adding bugs to the code and making sure everything works as the original DLL, it was translated as directly from assembly to C as possible. This resulted in `goto`s and a huge `switch` to emulate `jmp eax` instructions. A lot of macros were used to simulate Intel flags. Look at the code at your own risk.
 
