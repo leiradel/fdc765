@@ -596,6 +596,8 @@ static void EDsk2Dsk(Context* ctx, uint8_t Unit) {
     uint32_t F, G, SectorLen, DOffset, DskOffset, EDskOffset, MaxTrackLen;
     void* DskArray;
 
+    void* (*Realloc)(void*, size_t) = ctx->edi.ctrl->Realloc;
+
     GetUnitPtr(ctx, Unit);
     ctx->ebx = ctx->eax;
 
@@ -643,7 +645,7 @@ static void EDsk2Dsk(Context* ctx, uint8_t Unit) {
     ADD(ctx, ctx->eax.e, 256);
     ADD(ctx, ctx->eax.e, 100000);         // add safe space beyond disk space
 
-    ctx->eax.ptr = ctx->edi.ctrl->Realloc(NULL, ctx->eax.e);
+    ctx->eax.ptr = Realloc(NULL, ctx->eax.e);
 
     DskArray = ctx->eax.ptr;
     if (ctx->eax.ptr == NULL) {
@@ -771,7 +773,7 @@ static void EDsk2Dsk(Context* ctx, uint8_t Unit) {
         INC(ctx, F);
     }
 
-    ctx->edi.ctrl->Realloc(ctx->ebx.disk->DiskArrayPtr, 0);
+    Realloc(ctx->ebx.disk->DiskArrayPtr, 0);
     ctx->eax.ptr = DskArray;
     ctx->ebx.disk->DiskArrayPtr = ctx->eax.ptr;
 
