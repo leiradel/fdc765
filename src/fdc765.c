@@ -48,6 +48,7 @@ Context;
 #define CALL(ctx, label) do { run((ctx), (label)); } while (0)
 #define AND(ctx, left, right) do { (left) &= (right); (ctx)->zero = (left) == 0; (ctx)->carry = 0; } while (0)
 #define OR(ctx, left, right) do { (left) |= (right); (ctx)->zero = (left) == 0; (ctx)->carry = 0; } while (0)
+#define XOR(ctx, left, right) do { (left) ^= (right); (ctx)->zero = (left) == 0; (ctx)->carry = 0; } while (0)
 #define SHL(ctx, left, right) do { (left) <<= (right); } while (0)
 #define SHR(ctx, left, right) do { (left) >>= (right); } while (0)
 #define INC(ctx, val) do { (val)++; (ctx)->zero = (val) == 0; } while (0)
@@ -610,9 +611,9 @@ static void EDsk2Dsk(Context* ctx, uint8_t unit) {
     ctx->eax.l = NumTracks;
     ctx->ecx.l = NumSides;
     ctx->eax.x = (uint16_t)ctx->eax.l * (uint16_t)ctx->ecx.l;
-    ctx->eax.e &= 0xffff;
+    AND(ctx, ctx->eax.e, 0xffff);
 
-    ctx->ecx.e ^= ctx->ecx.e;
+    XOR(ctx, ctx->ecx.e, ctx->ecx.e);
     ctx->esi.u8 = ctx->ebx.disk->DiskArrayPtr;
     ctx->esi.u8 += DOffset;
 
@@ -632,7 +633,7 @@ static void EDsk2Dsk(Context* ctx, uint8_t unit) {
     ctx->eax.l = NumTracks;
     ctx->ecx.l = NumSides;
     ctx->eax.x = (uint16_t)ctx->eax.l * (uint16_t)ctx->ecx.l;
-    ctx->eax.e &= 0xffff;
+    AND(ctx, ctx->eax.e, 0xffff);
     ctx->ecx.e = MaxTrackLen;
     ctx->eax.e *= ctx->ecx.e;
     ADD(ctx, ctx->eax.e, 256);
@@ -668,7 +669,7 @@ static void EDsk2Dsk(Context* ctx, uint8_t unit) {
     ctx->ecx.l = NumSides;
 
     ctx->eax.x = (uint16_t)ctx->eax.l * (uint16_t)ctx->ecx.l;
-    ctx->eax.e &= 0xffff;
+    AND(ctx, ctx->eax.e, 0xffff);
 
     F = 0;
 
@@ -703,7 +704,7 @@ static void EDsk2Dsk(Context* ctx, uint8_t unit) {
                 ctx->edi.u8 += DskOffset;
 
                 ctx->ecx.e = NumSectors;
-                ctx->ecx.e <<= 3;
+                SHL(ctx, ctx->ecx.e, 3);
                 ADD(ctx, ctx->ecx.e, 0x18);
                 rep_movsb(ctx);
 
@@ -722,7 +723,7 @@ static void EDsk2Dsk(Context* ctx, uint8_t unit) {
                 for (int loop_counter = ctx->eax.e; loop_counter >= 0; loop_counter--) {
                     // The edsk's sector length is found in the Sector Info List
                     ctx->eax.e = G;
-                    ctx->eax.e <<= 3;
+                    SHL(ctx, ctx->eax.e, 3);
                     ADD(ctx, ctx->eax.e, 30);
                     ADD(ctx, ctx->eax.e, EDskOffset);
                     ctx->esi.u8 = ctx->ebx.disk->DiskArrayPtr;
@@ -739,7 +740,7 @@ static void EDsk2Dsk(Context* ctx, uint8_t unit) {
                         
                         ctx->ecx.e = SectorLen;
                         ADD(ctx, DOffset, ctx->ecx.e);
-                        ctx->ecx.e >>= 2;
+                        SHR(ctx, ctx->ecx.e, 2);
                         rep_movsd(ctx);
                         ctx->ecx.e = SectorLen;
                         AND(ctx, ctx->ecx.e, 3);
@@ -759,7 +760,7 @@ static void EDsk2Dsk(Context* ctx, uint8_t unit) {
             ctx->esi.u8 += F;
             ctx->esi.u8 += 0x34;
             ctx->eax.e = *ctx->esi.u8;
-            ctx->eax.e <<= 8;
+            SHL(ctx, ctx->eax.e, 8);
             ADD(ctx, EDskOffset, ctx->eax.e);
         }
 
@@ -804,7 +805,7 @@ again:
             ctx->edi.ctrl->FDCCommandByte = ctx->eax.l;
 
             ctx->eax.l = ctx->edi.ctrl->FDCCommandByte;
-            ctx->eax.e &= 31;                 // mask command bits
+            AND(ctx, ctx->eax.e, 31);                 // mask command bits
 
             ctx->edi.ctrl->LastFDCCmd = ctx->eax.l;    // for debugging purposes only
 
@@ -893,30 +894,30 @@ again:
         case case_TSE_NotReady: label_TSE_NotReady:
 
             ctx->edi.ctrl->TSEError = true;
-            ctx->edi.ctrl->ST0 |= 0x8;       // FDD is in the not-ready state
-            ctx->edi.ctrl->ST3 &= 0xdf;
+            OR(ctx, ctx->edi.ctrl->ST0, 0x8);       // FDD is in the not-ready state
+            AND(ctx, ctx->edi.ctrl->ST3, 0xdf);
             goto label_TSE_Quit;
 
         case case_TSE_1: label_TSE_1:
-            ctx->edi.ctrl->ST3 &= 0xfb;
-            ctx->edi.ctrl->ST0 &= 0xfb;
+            AND(ctx, ctx->edi.ctrl->ST3, 0xfb);
+            AND(ctx, ctx->edi.ctrl->ST0, 0xfb);
             ctx->eax.l = ctx->edi.ctrl->FDCParameters[0]; // CC1
-            ctx->eax.l >>= 2;                         // HD >> bit 0
-            ctx->eax.l &= 1;                         // mask off the HD value
+            SHR(ctx, ctx->eax.l, 2);                         // HD >> bit 0
+            AND(ctx, ctx->eax.l, 1);                         // mask off the HD value
             ctx->ebx.disk->CHEAD = ctx->eax.l;               // set current head for this unit
             CMP(ctx, ctx->eax.l, 0);
             JE(ctx, label_TSE_2);                        // branch forward if H = 0
 
-            ctx->edi.ctrl->ST3 |= 0x4;
-            ctx->edi.ctrl->ST0 |= 0x4;
+            OR(ctx, ctx->edi.ctrl->ST3, 0x4);
+            OR(ctx, ctx->edi.ctrl->ST0, 0x4);
             CMP(ctx, ctx->ebx.disk->DiskBlock.NumSides, 2);   // HD can be 1 if the disk is double sided
             JE(ctx, label_TSE_2);
 
-            ctx->edi.ctrl->ST3 &= 0xfb;
-            ctx->edi.ctrl->ST0 &= 0xfb;
+            AND(ctx, ctx->edi.ctrl->ST3, 0xfb);
+            AND(ctx, ctx->edi.ctrl->ST0, 0xfb);
             ctx->ebx.disk->CHEAD = 0;                // else current head is reset to zero
             ctx->edi.ctrl->TSEError = true;          // and signal the error
-            ctx->edi.ctrl->ST0 |= 0x8;
+            OR(ctx, ctx->edi.ctrl->ST0, 0x8);
             // fallthrough
 
         case case_TSE_2: label_TSE_2:
@@ -926,7 +927,7 @@ again:
         case case_TSE_Quit: label_TSE_Quit:
             CMP(ctx, ctx->edi.ctrl->TSEError, true);
             JNE(ctx, label_TSE_4);
-            ctx->edi.ctrl->ST0 |= 0x40;   // abnormal termination of command
+            OR(ctx, ctx->edi.ctrl->ST0, 0x40);   // abnormal termination of command
             // fallthrough
 
         case case_TSE_4: label_TSE_4:
@@ -1022,7 +1023,7 @@ again:
         case case_FDC_ReadSectorID1: label_FDC_ReadSectorID1:
             // FDCCommandCallback(ctx, 2);
 
-            ctx->edi.ctrl->MainStatusReg |= 16;       // FDC is busy
+            OR(ctx, ctx->edi.ctrl->MainStatusReg, 16);       // FDC is busy
             ctx->edi.ctrl->ST2 = 0;
             CALL(ctx, case_TrapStandardErrors);
             CMP(ctx, ctx->edi.ctrl->TSEError, true);
@@ -1062,13 +1063,12 @@ again:
             INC(ctx, ctx->edx.l);
             CMP(ctx, ctx->edx.l, ctx->ebx.disk->TrackBlock.NumSectors);
             JC(ctx, label_RSJmp1);
-            ctx->edx.l ^= ctx->edx.l;
+            XOR(ctx, ctx->edx.l, ctx->edx.l);
             // fallthrough
 
         case case_RSJmp1: label_RSJmp1:
             ctx->ebx.disk->CSR = ctx->edx.l;
-            ctx->edx.l |= ctx->edx.l;
-            CMP(ctx, ctx->edx.l, 0);
+            OR(ctx, ctx->edx.l, ctx->edx.l);
             JE(ctx, label_FDC_RdScDone);
             // fallthrough
 
@@ -1079,14 +1079,14 @@ again:
             // fallthrough
 
         case case_FDC_RdScDone: label_FDC_RdScDone:
-            ctx->edi.ctrl->ST0 &= 0x3f;  // normal termination
+            AND(ctx, ctx->edi.ctrl->ST0, 0x3f);  // normal termination
             // fallthrough
 
         case case_ReadID_Results: label_ReadID_Results:
-            ctx->edi.ctrl->ST0 &= 0xfc;
+            AND(ctx, ctx->edi.ctrl->ST0, 0xfc);
             ctx->eax.l = ctx->edi.ctrl->FDCParameters[0];
-            ctx->eax.l &= 3;
-            ctx->edi.ctrl->ST0 |= ctx->eax.l;
+            AND(ctx, ctx->eax.l, 3);
+            OR(ctx, ctx->edi.ctrl->ST0, ctx->eax.l);
 
             ctx->edx.u8 = &ctx->edi.ctrl->FDCResults[0];
             ctx->eax.l = ctx->edi.ctrl->ST0;               // ST0
@@ -1096,8 +1096,8 @@ again:
             // Epyx 21 fix,
             // we don't read the sector data in a read sector ID command,
             // so we can't have a CRC error in the sector data reported.
-            ctx->eax.l &= 255 - 32;           // ST1
-            ctx->eax.h &= 255 - 32;           // ST2
+            AND(ctx, ctx->eax.l, 255 - 32);           // ST1
+            AND(ctx, ctx->eax.h, 255 - 32);           // ST2
 
             WRITEW(ctx->edx.u8 + 1, ctx->eax.x);
             ctx->eax.e = READDW(ctx->esi.u8);  // C,H,R,N
@@ -1150,7 +1150,7 @@ again:
 
         // Command = 7
         case case_FDC_Recalibrate: label_FDC_Recalibrate:
-            ctx->edi.ctrl->ST0 &= 0xdf;
+            AND(ctx, ctx->edi.ctrl->ST0, 0xdf);
             ctx->edi.ctrl->FDCReturn = case_FDC_Recalibrate1;
             ctx->ecx.x = 1;                   // expect 1 byte
             goto label_ReceiveCommandBytes;
@@ -1165,9 +1165,9 @@ again:
 
         case case_FDC_Recalibrate2: label_FDC_Recalibrate2:
             ctx->ebx.disk->CTK = 0;
-            ctx->edi.ctrl->ST3 |= 0x10;
-            ctx->edi.ctrl->ST0 &= 0x3f;
-            ctx->edi.ctrl->ST0 |= 0x20;
+            OR(ctx, ctx->edi.ctrl->ST3, 0x10);
+            AND(ctx, ctx->edi.ctrl->ST0, 0x3f);
+            OR(ctx, ctx->edi.ctrl->ST0, 0x20);
             ctx->edi.ctrl->SeekResult = 0x20;         // Normal Termination of Recalibrate Command
             // fallthrough
 
@@ -1183,7 +1183,7 @@ again:
         case case_FDC_SenseInterruptStatus: label_FDC_SenseInterruptStatus:
             FDCCommandCallback(ctx, 1);
 
-            ctx->edi.ctrl->MainStatusReg |= 16;       // FDC is busy
+            OR(ctx, ctx->edi.ctrl->MainStatusReg, 16);       // FDC is busy
             ctx->esi.u8 = &ctx->edi.ctrl->FDCResults[0];
 
             ctx->ebx.disk = ctx->edi.ctrl->SeekUnitPtr;       // drive unit which was issued a Seek/Recalibrate command
@@ -1198,8 +1198,8 @@ again:
             ctx->ebx.disk->SeekDone = false;
             ctx->eax.l = ctx->edi.ctrl->SeekResult;          // result from seek command
             ctx->ecx.l = ctx->ebx.disk->CHEAD;
-            ctx->ecx.l <<= 2;
-            ctx->eax.l |= ctx->ecx.l;
+            SHL(ctx, ctx->ecx.l, 2);
+            OR(ctx, ctx->eax.l, ctx->ecx.l);
             ctx->ecx.x = 2;                   // 2 result bytes after a seek
             ctx->edi.ctrl->NumResults = 2;
             goto label_FDC_SenseCont;
@@ -1221,7 +1221,7 @@ again:
         case case_FDC_SenseCont: label_FDC_SenseCont:
             ctx->edx.disk = &ctx->edi.ctrl->FDDUnit1;
             if (ctx->ebx.disk == ctx->edx.disk) {      // offset FDDUnit1
-                ctx->eax.l |= 1;        // set unit 1 bit in result
+                OR(ctx, ctx->eax.l, 1);        // set unit 1 bit in result
             }
 
             ctx->edi.ctrl->ST0 = ctx->eax.l;
@@ -1246,7 +1246,7 @@ again:
         case case_FDC_Specify1: label_FDC_Specify1:
             FDCCommandCallback(ctx, 3);
 
-            ctx->edi.ctrl->ST0 &= 0x3f;
+            AND(ctx, ctx->edi.ctrl->ST0, 0x3f);
 
             CALL(ctx, case_InitFDC);
             return;
@@ -1261,25 +1261,25 @@ again:
         case case_FDC_SenseDriveStatus1: label_FDC_SenseDriveStatus1:
             FDCCommandCallback(ctx, 2);
 
-            ctx->edi.ctrl->MainStatusReg |= 16;       // FDC is busy
+            OR(ctx, ctx->edi.ctrl->MainStatusReg, 16);       // FDC is busy
             ctx->edi.ctrl->ST3 = 0x40;                // assume write-protected here
 
             GetUnitPtr(ctx, ctx->edi.ctrl->FDCParameters[0]);
             ctx->ebx = ctx->eax;
 
             ctx->eax.l = ctx->edi.ctrl->FDCParameters[0];
-            ctx->eax.l &= 3;
-            ctx->edi.ctrl->ST3 |= ctx->eax.l;                 // Unit
+            AND(ctx, ctx->eax.l, 3);
+            OR(ctx, ctx->edi.ctrl->ST3, ctx->eax.l);                 // Unit
             // fallthrough
 
         case case_FDC_SDS1: label_FDC_SDS1:
             ctx->ecx.l = ctx->ebx.disk->CHEAD;
-            ctx->ecx.l <<= 2;
-            ctx->edi.ctrl->ST3 |= ctx->ecx.l;
+            SHL(ctx, ctx->ecx.l, 2);
+            OR(ctx, ctx->edi.ctrl->ST3, ctx->ecx.l);
 
             CMP(ctx, ctx->ebx.disk->CTK, 0);
             JNE(ctx, label_FDC_SDS2);
-            ctx->edi.ctrl->ST3 |= 0x10;    // Track 0 signal
+            OR(ctx, ctx->edi.ctrl->ST3, 0x10);    // Track 0 signal
             // fallthrough
 
         case case_FDC_SDS2: label_FDC_SDS2:
@@ -1288,11 +1288,11 @@ again:
 
             CMP(ctx, ctx->edi.ctrl->MotorState, 1);     // Motor on?
             JNE(ctx, label_FDC_SDSResults);
-            ctx->edi.ctrl->ST3 |= 0x20;    // Drive is Ready
+            OR(ctx, ctx->edi.ctrl->ST3, 0x20);    // Drive is Ready
 
             CMP(ctx, ctx->ebx.disk->WriteProtect, true);
             JE(ctx, label_FDC_SDSResults);
-            ctx->edi.ctrl->ST3 &= 0xbf;          // clear write-protected bit
+            AND(ctx, ctx->edi.ctrl->ST3, 0xbf);          // clear write-protected bit
             // fallthrough
 
         case case_FDC_SDSResults: label_FDC_SDSResults:
@@ -1306,7 +1306,7 @@ again:
             goto label_FDC_SendData;
 
         case case_FDC_SenseDriveStatus2: label_FDC_SenseDriveStatus2:
-            ctx->edi.ctrl->ST0 &= 0x3f;
+            AND(ctx, ctx->edi.ctrl->ST0, 0x3f);
 
             CALL(ctx, case_InitFDC);
             return;
@@ -1341,12 +1341,12 @@ again:
         case case_STrk_Valid: label_STrk_Valid:
             ctx->ebx.disk->CTK = ctx->eax.l;           // update current track head is over
             ctx->ebx.disk->CSR = 0;
-            ctx->edi.ctrl->ST0 &= 0x1b;    // Normal termination, clear HD bit
-            ctx->edi.ctrl->ST0 |= 0x20;    // seek complete
+            AND(ctx, ctx->edi.ctrl->ST0, 0x1b);    // Normal termination, clear HD bit
+            OR(ctx, ctx->edi.ctrl->ST0, 0x20);    // seek complete
 
             ctx->eax.l = ctx->ebx.disk->CHEAD;
-            ctx->eax.l <<= 2;
-            ctx->edi.ctrl->ST0 |= ctx->eax.l;           // set HD bit
+            SHL(ctx, ctx->eax.l, 2);
+            OR(ctx, ctx->edi.ctrl->ST0, ctx->eax.l);           // set HD bit
 
             ctx->ebx.disk->SeekDone = true;
 
@@ -1363,7 +1363,7 @@ again:
             ctx->edi.ctrl->ST0 = ctx->eax.l;
             ctx->esi.u8[0] = ctx->eax.l;
 
-            ctx->edi.ctrl->MainStatusReg |= 16;       // FDC is busy
+            OR(ctx, ctx->edi.ctrl->MainStatusReg, 16);       // FDC is busy
             ctx->edi.ctrl->FDCReturn = case_FDC_Version1;
             ctx->ecx.x = 1;
             ctx->edi.ctrl->NumResults = 1;
@@ -1380,12 +1380,12 @@ again:
 
             ctx->esi.u8 = &ctx->edi.ctrl->FDCResults[0];
             ctx->eax.l = ctx->edi.ctrl->ST0;
-            ctx->eax.l &= 0x3f;
-            ctx->eax.l |= 0x80;
+            AND(ctx, ctx->eax.l, 0x3f);
+            OR(ctx, ctx->eax.l, 0x80);
             ctx->edi.ctrl->ST0 = ctx->eax.l;
             ctx->esi.u8[0] = ctx->eax.l;
 
-            ctx->edi.ctrl->MainStatusReg |= 16;       // FDC is busy
+            OR(ctx, ctx->edi.ctrl->MainStatusReg, 16);       // FDC is busy
             ctx->edi.ctrl->FDCReturn = case_FDC_Invalid1;
             ctx->ecx.x = 1;
             ctx->edi.ctrl->NumResults = 1;
@@ -1415,8 +1415,8 @@ again:
             ctx->edi.ctrl->FDC_RCVDCnt = ctx->ecx.x;
             ctx->edi.ctrl->FDC_RCVDLoc = ctx->edx.u8;
             ctx->edi.ctrl->FDCVector = case_FDC_ReceiveDataLoop;
-            ctx->edi.ctrl->MainStatusReg &= 0x3f;
-            ctx->edi.ctrl->MainStatusReg |= 0x80;
+            AND(ctx, ctx->edi.ctrl->MainStatusReg, 0x3f);
+            OR(ctx, ctx->edi.ctrl->MainStatusReg, 0x80);
             return;
 
         case case_FDC_ReceiveDataLoop: label_FDC_ReceiveDataLoop:
@@ -1441,7 +1441,7 @@ again:
             ctx->edi.ctrl->FDC_SENDCnt = ctx->ecx.x;
             ctx->edi.ctrl->FDC_SENDLoc = ctx->esi.u8;
             ctx->edi.ctrl->FDCVector = case_FDC_SendData1;
-            ctx->edi.ctrl->MainStatusReg |= 0xc0;
+            OR(ctx, ctx->edi.ctrl->MainStatusReg, 0xc0);
             return;
 
         case case_FDC_SendData1: label_FDC_SendData1:
@@ -1469,7 +1469,7 @@ again:
         // 3. terminal count is not received
 
         case case_ReadSectorData: label_ReadSectorData:
-            ctx->eax.l ^= ctx->eax.l;
+            XOR(ctx, ctx->eax.l, ctx->eax.l);
             ctx->edi.ctrl->ST0 = ctx->eax.l;
             ctx->edi.ctrl->ST1 = ctx->eax.l;
             ctx->edi.ctrl->ST2 = ctx->eax.l;
@@ -1488,7 +1488,7 @@ again:
             goto label_ReturnSectorRWResults;         // and exit returning the error
 
         case case_ReadSectorData_1: label_ReadSectorData_1:
-            ctx->edi.ctrl->MainStatusReg |= 32 + 16;      // enter Execution mode + busy
+            OR(ctx, ctx->edi.ctrl->MainStatusReg, 32 + 16);      // enter Execution mode + busy
 
             ctx->edi.ctrl->IndexHoleCount = 0;
             ctx->edi.ctrl->DTL_BytesSent = false;
@@ -1510,13 +1510,12 @@ again:
             INC(ctx, ctx->edx.l);
             CMP(ctx, ctx->edx.l, ctx->ebx.disk->TrackBlock.NumSectors);
             JC(ctx, label_IRSJmp1);
-            ctx->edx.l ^= ctx->edx.l;
+            XOR(ctx, ctx->edx.l, ctx->edx.l);
             // fallthrough
 
         case case_IRSJmp1: label_IRSJmp1:
             ctx->ebx.disk->CSR = ctx->edx.l;
-            ctx->edx.l |= ctx->edx.l;
-            CMP(ctx, ctx->edx.l, 0);
+            OR(ctx, ctx->edx.l, ctx->edx.l);
             JE(ctx, label_IRSDone);
             // fallthrough
 
@@ -1541,7 +1540,7 @@ again:
             WRITEDW(&ctx->edi.ctrl->FDCResults[3], ctx->eax.e);   // to Results buffer
 
             ctx->eax.x = READW(&ctx->esi.u8[4]);  // ctx->eax.l=ST1, ctx->eax.h=ST2
-            ctx->eax.x &= 0x2125;             // DE, ND or MA in ST1, DD or MD in ST2
+            AND(ctx, ctx->eax.x, 0x2125);             // DE, ND or MA in ST1, DD or MD in ST2
             WRITEW(&ctx->edi.ctrl->ST1, ctx->eax.x);    // DAM in ST2 ignored at this point
 
             CMP(ctx, ctx->edi.ctrl->ValidTrack, true);      // basically - is this track formatted?
@@ -1560,7 +1559,7 @@ again:
             // fallthrough
 
         case case_FDCR_NotBadC: label_FDCR_NotBadC:
-            ctx->edi.ctrl->ST2 |= ctx->eax.h;
+            OR(ctx, ctx->edi.ctrl->ST2, ctx->eax.h);
             // fallthrough
 
         case case_FDCR_SameC: label_FDCR_SameC:
@@ -1589,12 +1588,11 @@ again:
         // the DAM bit already in ST2 (from DSK file) is ignored in this test
 
         case case_Rd_NotMS1: label_Rd_NotMS1:
-            ctx->eax.l ^= ctx->eax.l;
+            XOR(ctx, ctx->eax.l, ctx->eax.l);
             ctx->edi.ctrl->ST2DAMBit = ctx->eax.l;
-            ctx->eax.l |= ctx->edi.ctrl->ST1;
-            ctx->eax.l |= ctx->edi.ctrl->ST2;
-            ctx->eax.l &= 0x3f;
-            CMP(ctx, ctx->eax.l, 0);
+            OR(ctx, ctx->eax.l, ctx->edi.ctrl->ST1);
+            OR(ctx, ctx->eax.l, ctx->edi.ctrl->ST2);
+            AND(ctx, ctx->eax.l, 0x3f);
             JNE(ctx, label_Rd_IgnoreDAM);  // also need to avoid setting AT in ST0
             // fallthrough
 
@@ -1603,9 +1601,8 @@ again:
 
         case case_Read_CheckDAM: label_Read_CheckDAM:
             ctx->eax.l = ctx->esi.u8[5];            // ST2 from sectorinfo
-            ctx->eax.l &= 64;
-            ctx->eax.l ^= ctx->edi.ctrl->DAM_Mask;
-            CMP(ctx, ctx->eax.l, 0);
+            AND(ctx, ctx->eax.l, 64);
+            XOR(ctx, ctx->eax.l, ctx->edi.ctrl->DAM_Mask);
             JE(ctx, label_Rd_TransferData);      // DAM bits verify so we transfer the data
 
             // if DAM doesn't match then we either,
@@ -1616,7 +1613,7 @@ again:
             JNE(ctx, label_SkipReadSector);          // SK=1 so just skip this sector
 
             ctx->edi.ctrl->ST2DAMBit = 64;             // set ST2 Control Mark bit
-            ctx->edi.ctrl->ST0 |= 0x40;                  // abnormal termination of command
+            OR(ctx, ctx->edi.ctrl->ST0, 0x40);                  // abnormal termination of command
             // fallthrough
 
         case case_Rd_IgnoreDAM: label_Rd_IgnoreDAM:
@@ -1624,7 +1621,7 @@ again:
             goto label_SectorDataToCPU;
 
         case case_Rd_Skip0: label_Rd_Skip0:
-            ctx->edi.ctrl->ST1 |= 0x80;                  // end of cylinder
+            OR(ctx, ctx->edi.ctrl->ST1, 0x80);                  // end of cylinder
             goto label_ReturnSectorRWResults;   // and exit returning the error
 
         // we have found the requested sector so transfer the sector data to the CPU
@@ -1643,7 +1640,7 @@ again:
             JE(ctx, label_LFRS_3);
 
             ctx->edi.ctrl->ST0 = 0x40;                // AT
-            ctx->edi.ctrl->ST1 |= 0x80;                // end of cylinder
+            OR(ctx, ctx->edi.ctrl->ST1, 0x80);                // end of cylinder
 
             CMP(ctx, ctx->edi.ctrl->ReadMode, u765_FDCReadTrack);
             JE(ctx, label_LFRS_3);
@@ -1713,9 +1710,9 @@ again:
 
             // if we get this far then the sector could not be found
             ctx->edi.ctrl->CurrentSectorInfo -= 8;
-            ctx->edi.ctrl->ST1 |= 4;              // No Data
-            ctx->edi.ctrl->ST0 &= 0x3f;
-            ctx->edi.ctrl->ST0 |= 0x40;      // AT
+            OR(ctx, ctx->edi.ctrl->ST1, 4);              // No Data
+            AND(ctx, ctx->edi.ctrl->ST0, 0x3f);
+            OR(ctx, ctx->edi.ctrl->ST0, 0x40);      // AT
             ctx->eax.l = 1;               // maybe should be the first sector ID?
             ctx->edi.ctrl->FDCResults[5] = ctx->eax.l;   // set final R result
             goto label_ReturnSectorRWResults;
@@ -1732,7 +1729,7 @@ again:
 
             if (ctx->ecx.l == 0) {
                 // if N = 0 (use DTL bytes)
-                ctx->ecx.e ^= ctx->ecx.e;
+                XOR(ctx, ctx->ecx.e, ctx->ecx.e);
                 ctx->ecx.l = ctx->edi.ctrl->FDCParameters[7]; // DTL from command
                 if (ctx->ecx.l > 128) {
                     ctx->ecx.l = 128;                     // DTL max bytes = 128
@@ -1742,7 +1739,7 @@ again:
             }
             else {
                 ctx->eax.e = 128;
-                ctx->eax.e <<= ctx->ecx.l;
+                SHL(ctx, ctx->eax.e, ctx->ecx.l);
                 ctx->ecx.e = ctx->eax.e;                            // ecx = physical sectorsize based on N value
                 ctx->edx.e = ctx->ecx.e;                            // edx = bytes of available sector data
     
@@ -1763,7 +1760,7 @@ again:
             JNE(ctx, label_SDTC_RandomData);
 
             ctx->eax.x = READW(&ctx->esi.u8[4]);                // fetch ST1 & ST2 from sectorinfo
-            ctx->eax.x &= 0x2020;                           // mask data error bits for ST1 & ST2
+            AND(ctx, ctx->eax.x, 0x2020);                           // mask data error bits for ST1 & ST2
             CMP(ctx, ctx->eax.x, 0x2020);                           // if both data error bits set
             JE(ctx, label_SDTC_RandomData);                    // then return a randomised sector
 
@@ -1817,7 +1814,7 @@ again:
                 ctx->eax.l = ctx->edi.ctrl->FDCRandomSeed;
                 ctx->eax.h = 3;
                 if (ctx->edi.ctrl->DskRndMethod == 255) {
-                    ctx->eax.x ^= ctx->eax.x;
+                    XOR(ctx, ctx->eax.x, ctx->eax.x);
                 }
 
                 while  (ctx->ecx.e > 0) {
@@ -1872,7 +1869,7 @@ again:
         label_SkipAutoSense:
                 if (ctx->eax.h == 1) {
                     // randomise the final byte of sector data
-                    ctx->ecx.e &= 0xffff;
+                    AND(ctx, ctx->ecx.e, 0xffff);
                     ctx->esi.u8[ctx->ecx.e - 1] = ctx->eax.l;
                 }
                 else {
@@ -1920,7 +1917,7 @@ again:
         // +3DOS single-sector writes and only to normal DSK files.
 
         case case_WriteSectorData: label_WriteSectorData:
-            ctx->eax.l ^= ctx->eax.l;
+            XOR(ctx, ctx->eax.l, ctx->eax.l);
             ctx->edi.ctrl->ST0 = ctx->eax.l;
             ctx->edi.ctrl->ST1 = ctx->eax.l;
             ctx->edi.ctrl->ST2 = ctx->eax.l;
@@ -1932,9 +1929,9 @@ again:
             JNE(ctx, label_WSD_WProt);        // jump if not write-protected
 
             ctx->edi.ctrl->TSEError = true;     // force the error
-            ctx->edi.ctrl->ST0 &= 0x3f;
-            ctx->edi.ctrl->ST0 |= 0x40;           // AT
-            ctx->edi.ctrl->ST1 |= 2;             // write-protected
+            AND(ctx, ctx->edi.ctrl->ST0, 0x3f);
+            OR(ctx, ctx->edi.ctrl->ST0, 0x40);           // AT
+            OR(ctx, ctx->edi.ctrl->ST1, 2);             // write-protected
             // fallthrough
 
         case case_WSD_WProt: label_WSD_WProt:
@@ -1946,7 +1943,7 @@ again:
             goto label_ReturnSectorRWResults;         // and exit returning the error
 
         case case_WriteSectorData_1: label_WriteSectorData_1:
-            ctx->edi.ctrl->MainStatusReg |= 32 + 16;      // enter Execution mode + busy
+            OR(ctx, ctx->edi.ctrl->MainStatusReg, 32 + 16);      // enter Execution mode + busy
 
             CALL(ctx, case_ReadCurrTrack);
 
@@ -1996,7 +1993,7 @@ again:
             CMP(ctx, ctx->eax.l, 0);
             JNE(ctx, label_CDTS_1);
 
-            ctx->ecx.x ^= ctx->ecx.x;
+            XOR(ctx, ctx->ecx.x, ctx->ecx.x);
             ctx->ecx.l = ctx->edi.ctrl->FDCParameters[7]; // DTL from command
             goto label_CDTS_2;
 
@@ -2025,15 +2022,15 @@ again:
             PUSH(ctx, ctx->eax);
             ctx->edx.u8 = &ctx->edi.ctrl->FDCResults[0];
 
-            ctx->edi.ctrl->ST0 &= 0xfb;
+            AND(ctx, ctx->edi.ctrl->ST0, 0xfb);
             ctx->eax.l = ctx->ebx.disk->CHEAD;
-            ctx->eax.l <<= 2;
-            ctx->edi.ctrl->ST0 |= ctx->eax.l;
+            SHL(ctx, ctx->eax.l, 2);
+            OR(ctx, ctx->edi.ctrl->ST0, ctx->eax.l);
 
-            ctx->edi.ctrl->ST0 &= 0xfc;
+            AND(ctx, ctx->edi.ctrl->ST0, 0xfc);
             ctx->eax.l = ctx->edi.ctrl->FDCParameters[0];
-            ctx->eax.l &= 3;
-            ctx->edi.ctrl->ST0 |= ctx->eax.l;            // insert unit number
+            AND(ctx, ctx->eax.l, 3);
+            OR(ctx, ctx->edi.ctrl->ST0, ctx->eax.l);            // insert unit number
 
             ctx->eax.l = ctx->edi.ctrl->ST0;      // ST0
             ctx->edx.u8[0] = ctx->eax.l;
@@ -2042,15 +2039,15 @@ again:
             ctx->edx.u8[1] = ctx->eax.l;
 
             ctx->eax.l = ctx->edi.ctrl->ST2;
-            ctx->eax.l &= 0xbf;
-            ctx->eax.l |= ctx->edi.ctrl->ST2DAMBit;
+            AND(ctx, ctx->eax.l, 0xbf);
+            OR(ctx, ctx->eax.l, ctx->edi.ctrl->ST2DAMBit);
             ctx->edi.ctrl->ST2 = ctx->eax.l;
             ctx->eax.l = ctx->edi.ctrl->ST2;
             ctx->edx.u8[2] = ctx->eax.l;
             ctx->eax = POP(ctx);
 
             ctx->edi.ctrl->OverRunError = false;
-            ctx->edi.ctrl->MainStatusReg &= 0xdf; // execution phase has ended and result phase has started
+            AND(ctx, ctx->edi.ctrl->MainStatusReg, 0xdf); // execution phase has ended and result phase has started
             ctx->edi.ctrl->FDCReturn = case_FDCBuff_ReturnSectorResults;
             ctx->esi.u8 = &ctx->edi.ctrl->FDCResults[0];
             ctx->ecx.x = 7;             // 7 bytes of result data
@@ -2064,7 +2061,7 @@ again:
         // ######################################################################
 
         case case_SkipNextSector: label_SkipNextSector:
-            ctx->eax.e ^= ctx->eax.e;
+            XOR(ctx, ctx->eax.e, ctx->eax.e);
             ctx->eax.x = READW(&ctx->esi.u8[6]);     // size of EDSK sector data
             ctx->esi.u8 += 8;          // next SectorInfo entry in SectorInfoList
 
@@ -2084,7 +2081,7 @@ again:
             PUSH(ctx, ctx->ecx);
             ctx->ecx.l = ctx->ebx.disk->TrackBlock.SectorSize;
             ctx->eax.e = 128;
-            ctx->eax.e <<= ctx->ecx.l;
+            SHL(ctx, ctx->eax.e, ctx->ecx.l);
             CMP(ctx, ctx->eax.e, 8192);
             JC(ctx, label_GSS_Exit);
             ctx->eax.e = 6144;
@@ -2140,7 +2137,7 @@ again:
             ctx->edi.u8 = ctx->esi.u8;         // edi=track data in FDDUnit0
             ctx->esi.u8 = &ctx->ebx.disk->TrackBlock.TrackData[0];
             ctx->ecx.x = ctx->ebx.disk->DiskBlock.TrackSize;
-            ctx->ecx.e &= 0xffff;
+            AND(ctx, ctx->ecx.e, 0xffff);
 
             rep_movsb(ctx);
 
@@ -2151,10 +2148,10 @@ again:
 
         // sets ctx->esi.u8 to the start of the current track data in FDDUnit0 array
         case case_LocateTrack: label_LocateTrack:
-            ctx->eax.e ^= ctx->eax.e;
-            ctx->edx.e ^= ctx->edx.e;
+            XOR(ctx, ctx->eax.e, ctx->eax.e);
+            XOR(ctx, ctx->edx.e, ctx->edx.e);
             ctx->edx.x = ctx->ebx.disk->DiskBlock.TrackSize;
-            ctx->edx.e &= 65535;
+            AND(ctx, ctx->edx.e, 65535);
             ctx->ecx.l = ctx->ebx.disk->CTK;      // current physical track head is over
             INC(ctx, ctx->ecx.l);
             // fallthrough
@@ -2168,7 +2165,7 @@ again:
         case case_LockTrkDone: label_LockTrkDone:
             CMP(ctx, ctx->ebx.disk->DiskBlock.NumSides, 2);
             JNE(ctx, label_LocSingleSide);
-            ctx->eax.e <<= 1;
+            SHL(ctx, ctx->eax.e, 1);
 
             CMP(ctx, ctx->ebx.disk->CHEAD, 1);
             JNE(ctx, label_LocSingleSide);
